@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Administración de Locales · Godoy</title>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#1e293b; --panel2:#273449; --line:#334155;
+    --txt:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --accent2:#0ea5e9;
+    --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --chip:#0b1220;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--txt);font-size:15px}
+  a{color:var(--accent)}
+  button{font-family:inherit;cursor:pointer}
+  input,select,textarea{font-family:inherit;font-size:14px;background:var(--chip);
+    color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  label{display:block;font-size:12px;color:var(--muted);margin:0 0 4px}
+  .field{margin-bottom:12px}
+  .btn{background:var(--accent2);color:#00131f;border:none;border-radius:8px;
+    padding:9px 16px;font-weight:600}
+  .btn:hover{background:var(--accent)}
+  .btn.sec{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
+  .btn.sec:hover{border-color:var(--accent)}
+  .btn.danger{background:transparent;color:var(--bad);border:1px solid var(--bad)}
+  .btn.sm{padding:5px 10px;font-size:13px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row>*{flex:1;min-width:140px}
+
+  /* Login */
+  #login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px}
+  #login .card{width:100%;max-width:380px}
+  .brand{font-weight:700;font-size:20px;margin-bottom:2px}
+  .brand small{display:block;color:var(--muted);font-weight:400;font-size:12px;margin-top:4px}
+
+  /* App shell */
+  #app{display:none}
+  header.top{display:flex;align-items:center;justify-content:space-between;
+    padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel);
+    position:sticky;top:0;z-index:20;flex-wrap:wrap;gap:10px}
+  nav.tabs{display:flex;gap:4px;flex-wrap:wrap}
+  nav.tabs button{background:transparent;border:none;color:var(--muted);
+    padding:8px 14px;border-radius:8px;font-weight:600}
+  nav.tabs button.active{background:var(--panel2);color:var(--txt)}
+  main{padding:20px;max-width:1200px;margin:0 auto}
+  h2.sec-title{margin:0 0 4px;font-size:20px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+
+  .grid{display:grid;gap:14px}
+  .cards{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+  .kpi{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+  .kpi .card{padding:16px}
+  .kpi .big{font-size:26px;font-weight:700;margin-top:6px}
+  .kpi .lbl{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+
+  .chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600}
+  .chip.ocupado{background:rgba(34,197,94,.15);color:#4ade80}
+  .chip.libre{background:rgba(148,163,184,.15);color:#cbd5e1}
+  .chip.refaccion{background:rgba(245,158,11,.15);color:#fbbf24}
+  .chip.pagado{background:rgba(34,197,94,.15);color:#4ade80}
+  .chip.pendiente{background:rgba(239,68,68,.15);color:#f87171}
+  .chip.parcial{background:rgba(245,158,11,.15);color:#fbbf24}
+  .chip.activo{background:rgba(56,189,248,.15);color:#7dd3fc}
+  .chip.finalizado{background:rgba(148,163,184,.15);color:#cbd5e1}
+
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  tr:hover td{background:var(--panel2)}
+  .tbl-wrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:auto}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;margin:0 0 14px;gap:10px;flex-wrap:wrap}
+
+  /* Modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(2,6,23,.7);display:none;
+    align-items:flex-start;justify-content:center;padding:30px 16px;z-index:50;overflow:auto}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    width:100%;max-width:540px;padding:22px}
+  .modal h3{margin:0 0 16px}
+  .modal .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:8px}
+
+  .muted{color:var(--muted)}
+  .empty{padding:34px;text-align:center;color:var(--muted)}
+  .err{color:var(--bad);font-size:13px;margin-top:8px;min-height:16px}
+  .setup{background:rgba(245,158,11,.1);border:1px solid var(--warn);color:#fcd34d;
+    padding:14px;border-radius:10px;margin:16px 0;font-size:14px}
+  code{background:var(--chip);padding:2px 6px;border-radius:5px;font-size:13px}
+  .actbtns{display:flex;gap:6px}
+</style>
+</head>
+<body>
+
+<!-- =================== CONFIG =================== -->
+<script>
+  /* ► Pegá acá los datos de tu proyecto Supabase (Project Settings → API) */
+  const SUPABASE_URL = "https://takzsxifnpguyeefuhus.supabase.co/rest/v1/";       // ej: https://xxxx.supabase.co
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRha3pzeGlmbnBndXllZWZ1aHVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzNDY4NzMsImV4cCI6MjEwMDkyMjg3M30.e2CrOrCEWNnljf3gE5h3xFT1V7GoQunpTBrlCQ3XJ0E";
+</script>
+
+<!-- =================== LOGIN =================== -->
+<div id="login">
+  <div class="card">
+    <div class="brand">Administración de Locales
+      <small>Edificio San Lorenzo O. y P. A. de Sarmiento S. · Rawson, San Juan</small>
+    </div>
+    <div id="setupWarn" class="setup" style="display:none">
+      Falta configurar Supabase. Editá <code>index.html</code> y completá
+      <code>SUPABASE_URL</code> y <code>SUPABASE_ANON_KEY</code>.
+    </div>
+    <div style="margin-top:16px">
+      <div class="field"><label>Email</label><input id="email" type="email" autocomplete="username"></div>
+      <div class="field"><label>Contraseña</label><input id="pass" type="password" autocomplete="current-password"></div>
+      <button class="btn" style="width:100%" id="btnLogin">Ingresar</button>
+      <div class="err" id="loginErr"></div>
+      <p class="muted" style="font-size:12px;margin-top:14px">
+        El usuario se crea desde Supabase → Authentication → Users → Add user.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- =================== APP =================== -->
+<div id="app">
+  <header class="top">
+    <div style="font-weight:700">🏢 Locales · Godoy</div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="dashboard" class="active">Resumen</button>
+      <button data-tab="locales">Locales</button>
+      <button data-tab="inquilinos">Inquilinos</button>
+      <button data-tab="contratos">Contratos</button>
+      <button data-tab="pagos">Pagos</button>
+      <button data-tab="gastos">Gastos</button>
+    </nav>
+    <button class="btn sec sm" id="btnLogout">Salir</button>
+  </header>
+  <main>
+    <div id="view"></div>
+  </main>
+</div>
+
+<!-- =================== MODAL =================== -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3 id="modalTitle"></h3>
+    <div id="modalBody"></div>
+    <div class="err" id="modalErr"></div>
+    <div class="actions">
+      <button class="btn sec" id="modalCancel">Cancelar</button>
+      <button class="btn" id="modalSave">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+/* ============================ APP ============================ */
+let sb = null;
+const $ = (s)=>document.querySelector(s);
+const money = (n,m)=> (m==='USD'?'US$ ':'$ ') + (Number(n)||0).toLocaleString('es-AR',{minimumFractionDigits:0});
+const esc = (s)=> (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fdate = (d)=> d ? new Date(d+'T00:00:00').toLocaleDateString('es-AR') : '—';
+
+// cache
+let DATA = {locales:[], inquilinos:[], contratos:[], pagos:[], gastos:[]};
+
+/* ---------- Arranque ---------- */
+function boot(){
+  const ok = SUPABASE_URL && !SUPABASE_URL.includes('PEGAR') &&
+             SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes('PEGAR');
+  if(!ok){ $('#setupWarn').style.display='block'; return; }
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  sb.auth.getSession().then(({data})=>{ if(data.session) enterApp(); });
+}
+$('#btnLogin').onclick = async ()=>{
+  $('#loginErr').textContent='';
+  const email=$('#email').value.trim(), password=$('#pass').value;
+  if(!sb){ $('#loginErr').textContent='Configurá Supabase primero.'; return; }
+  const {error}= await sb.auth.signInWithPassword({email,password});
+  if(error){ $('#loginErr').textContent = error.message; return; }
+  enterApp();
+};
+$('#pass').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#btnLogin').click(); });
+$('#btnLogout').onclick = async ()=>{ await sb.auth.signOut(); location.reload(); };
+
+async function enterApp(){
+  $('#login').style.display='none';
+  $('#app').style.display='block';
+  await loadAll();
+  render('dashboard');
+}
+document.querySelectorAll('#tabs button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('#tabs button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    render(b.dataset.tab);
+  };
+});
+
+/* ---------- Datos ---------- */
+async function loadAll(){
+  const [lo,inq,con,pa,ga] = await Promise.all([
+    sb.from('locales').select('*').order('id'),
+    sb.from('inquilinos').select('*').order('nombre'),
+    sb.from('contratos').select('*').order('id',{ascending:false}),
+    sb.from('pagos').select('*').order('periodo',{ascending:false}),
+    sb.from('gastos').select('*').order('fecha',{ascending:false}),
+  ]);
+  DATA = {
+    locales:lo.data||[], inquilinos:inq.data||[], contratos:con.data||[],
+    pagos:pa.data||[], gastos:ga.data||[]
+  };
+}
+const localName = id => (DATA.locales.find(l=>l.id==id)||{}).nombre || '—';
+const inqName   = id => (DATA.inquilinos.find(i=>i.id==id)||{}).nombre || '—';
+function contratoLabel(c){
+  return `${localName(c.local_id)} · ${inqName(c.inquilino_id)}`;
+}
+
+/* ============================ VISTAS ============================ */
+function render(tab){
+  const v=$('#view');
+  if(tab==='dashboard') return v.innerHTML = viewDashboard();
+  if(tab==='locales')    return v.innerHTML = viewLocales();
+  if(tab==='inquilinos') return v.innerHTML = viewInquilinos();
+  if(tab==='contratos')  return v.innerHTML = viewContratos();
+  if(tab==='pagos')      return v.innerHTML = viewPagos();
+  if(tab==='gastos')     return v.innerHTML = viewGastos();
+}
+
+/* ---- Dashboard ---- */
+function viewDashboard(){
+  const L=DATA.locales;
+  const ocup=L.filter(l=>l.estado==='ocupado').length;
+  const libre=L.filter(l=>l.estado==='libre').length;
+  const refa=L.filter(l=>l.estado==='refaccion').length;
+
+  // ingreso mensual esperado por contratos activos
+  const activos=DATA.contratos.filter(c=>c.estado==='activo');
+  const ingARS=activos.filter(c=>c.moneda==='ARS').reduce((s,c)=>s+Number(c.monto_alquiler||0),0);
+  const ingUSD=activos.filter(c=>c.moneda==='USD').reduce((s,c)=>s+Number(c.monto_alquiler||0),0);
+
+  // pagos pendientes
+  const pend=DATA.pagos.filter(p=>p.estado!=='pagado');
+
+  // gastos del mes actual
+  const ym=new Date().toISOString().slice(0,7);
+  const gm=DATA.gastos.filter(g=>(g.fecha||'').slice(0,7)===ym);
+  const gARS=gm.filter(g=>g.moneda==='ARS').reduce((s,g)=>s+Number(g.monto||0),0);
+  const gUSD=gm.filter(g=>g.moneda==='USD').reduce((s,g)=>s+Number(g.monto||0),0);
+
+  const locCards = L.map(l=>{
+    const c=activos.find(x=>x.local_id==l.id);
+    return `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong>${esc(l.nombre)}</strong>
+        <span class="chip ${l.estado}">${l.estado}</span>
+      </div>
+      <div class="muted" style="font-size:13px;margin-top:8px">
+        ${c ? `${esc(inqName(c.inquilino_id))}<br>${money(c.monto_alquiler,c.moneda)} / mes`
+            : 'Sin contrato activo'}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `
+    <h2 class="sec-title">Resumen</h2>
+    <p class="sub">Estado general de los 3 locales del edificio.</p>
+    <div class="grid kpi" style="margin-bottom:22px">
+      <div class="card"><div class="lbl">Ocupados</div><div class="big" style="color:var(--ok)">${ocup}</div></div>
+      <div class="card"><div class="lbl">Libres</div><div class="big">${libre}</div></div>
+      <div class="card"><div class="lbl">En refacción</div><div class="big" style="color:var(--warn)">${refa}</div></div>
+      <div class="card"><div class="lbl">Ingreso mensual</div><div class="big">${money(ingARS,'ARS')}</div>
+        ${ingUSD?`<div class="muted">+ ${money(ingUSD,'USD')}</div>`:''}</div>
+      <div class="card"><div class="lbl">Pagos pendientes</div><div class="big" style="color:${pend.length?'var(--bad)':'var(--ok)'}">${pend.length}</div></div>
+      <div class="card"><div class="lbl">Gastos del mes</div><div class="big">${money(gARS,'ARS')}</div>
+        ${gUSD?`<div class="muted">+ ${money(gUSD,'USD')}</div>`:''}</div>
+    </div>
+    <h3 style="margin:0 0 12px">Locales</h3>
+    <div class="grid cards">${locCards||'<p class="empty">No hay locales.</p>'}</div>
+  `;
+}
+
+/* ---- Locales ---- */
+function viewLocales(){
+  const rows=DATA.locales.map(l=>`
+    <tr>
+      <td><strong>${esc(l.nombre)}</strong></td>
+      <td>${l.superficie_m2?esc(l.superficie_m2)+' m²':'—'}</td>
+      <td><span class="chip ${l.estado}">${l.estado}</span></td>
+      <td class="muted">${esc(l.descripcion||'')}</td>
+      <td class="actbtns">
+        <button class="btn sec sm" onclick="openLocal(${l.id})">Editar</button>
+      </td>
+    </tr>`).join('');
+  return `
+    <div class="toolbar">
+      <div><h2 class="sec-title">Locales</h2><p class="sub" style="margin:0">Estado de ocupación de cada unidad.</p></div>
+      <button class="btn" onclick="openLocal()">+ Nuevo local</button>
+    </div>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>Nombre</th><th>Superficie</th><th>Estado</th><th>Descripción</th><th></th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="5" class="empty">Sin locales</td></tr>'}</tbody></table>
+    </div>`;
+}
+
+/* ---- Inquilinos ---- */
+function viewInquilinos(){
+  const rows=DATA.inquilinos.map(i=>`
+    <tr>
+      <td><strong>${esc(i.nombre)}</strong></td>
+      <td>${esc(i.dni_cuit||'—')}</td>
+      <td>${esc(i.telefono||'—')}</td>
+      <td>${esc(i.email||'—')}</td>
+      <td class="actbtns">
+        <button class="btn sec sm" onclick="openInquilino(${i.id})">Editar</button>
+        <button class="btn danger sm" onclick="delRow('inquilinos',${i.id})">Borrar</button>
+      </td>
+    </tr>`).join('');
+  return `
+    <div class="toolbar">
+      <div><h2 class="sec-title">Inquilinos</h2><p class="sub" style="margin:0">Locatarios de los locales.</p></div>
+      <button class="btn" onclick="openInquilino()">+ Nuevo inquilino</button>
+    </div>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>Nombre</th><th>DNI/CUIT</th><th>Teléfono</th><th>Email</th><th></th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="5" class="empty">Sin inquilinos</td></tr>'}</tbody></table>
+    </div>`;
+}
+
+/* ---- Contratos ---- */
+function viewContratos(){
+  const rows=DATA.contratos.map(c=>`
+    <tr>
+      <td><strong>${esc(localName(c.local_id))}</strong></td>
+      <td>${esc(inqName(c.inquilino_id))}</td>
+      <td>${money(c.monto_alquiler,c.moneda)}</td>
+      <td>${fdate(c.fecha_inicio)} → ${fdate(c.fecha_fin)}</td>
+      <td>${c.dia_vencimiento?('día '+c.dia_vencimiento):'—'}</td>
+      <td><span class="chip ${c.estado}">${c.estado}</span></td>
+      <td class="actbtns">
+        <button class="btn sec sm" onclick="openContrato(${c.id})">Editar</button>
+        <button class="btn danger sm" onclick="delRow('contratos',${c.id})">Borrar</button>
+      </td>
+    </tr>`).join('');
+  return `
+    <div class="toolbar">
+      <div><h2 class="sec-title">Contratos</h2><p class="sub" style="margin:0">Alquileres, plazos y ajustes.</p></div>
+      <button class="btn" onclick="openContrato()">+ Nuevo contrato</button>
+    </div>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>Local</th><th>Inquilino</th><th>Alquiler</th><th>Vigencia</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="7" class="empty">Sin contratos</td></tr>'}</tbody></table>
+    </div>`;
+}
+
+/* ---- Pagos ---- */
+function viewPagos(){
+  const rows=DATA.pagos.map(p=>{
+    const c=DATA.contratos.find(x=>x.id==p.contrato_id);
+    return `<tr>
+      <td>${esc(p.periodo)}</td>
+      <td>${c?esc(contratoLabel(c)):'—'}</td>
+      <td>${money(p.monto,p.moneda)}</td>
+      <td>${fdate(p.fecha_pago)}</td>
+      <td>${esc(p.medio||'—')}</td>
+      <td><span class="chip ${p.estado}">${p.estado}</span></td>
+      <td class="actbtns">
+        <button class="btn sec sm" onclick="openPago(${p.id})">Editar</button>
+        <button class="btn danger sm" onclick="delRow('pagos',${p.id})">Borrar</button>
+      </td>
+    </tr>`;}).join('');
+  return `
+    <div class="toolbar">
+      <div><h2 class="sec-title">Pagos de alquiler</h2><p class="sub" style="margin:0">Cobranzas por período.</p></div>
+      <button class="btn" onclick="openPago()">+ Registrar pago</button>
+    </div>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>Período</th><th>Contrato</th><th>Monto</th><th>Fecha pago</th><th>Medio</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="7" class="empty">Sin pagos</td></tr>'}</tbody></table>
+    </div>`;
+}
+
+/* ---- Gastos ---- */
+function viewGastos(){
+  const rows=DATA.gastos.map(g=>`
+    <tr>
+      <td>${fdate(g.fecha)}</td>
+      <td>${esc(g.categoria)}</td>
+      <td>${g.local_id?esc(localName(g.local_id)):'<span class="muted">General</span>'}</td>
+      <td>${esc(g.descripcion||'')}</td>
+      <td>${money(g.monto,g.moneda)}</td>
+      <td><span class="chip ${g.estado}">${g.estado}</span></td>
+      <td class="actbtns">
+        <button class="btn sec sm" onclick="openGasto(${g.id})">Editar</button>
+        <button class="btn danger sm" onclick="delRow('gastos',${g.id})">Borrar</button>
+      </td>
+    </tr>`).join('');
+  return `
+    <div class="toolbar">
+      <div><h2 class="sec-title">Gastos y servicios</h2><p class="sub" style="margin:0">Luz, agua, impuestos, expensas, mantenimiento.</p></div>
+      <button class="btn" onclick="openGasto()">+ Nuevo gasto</button>
+    </div>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>Fecha</th><th>Categoría</th><th>Local</th><th>Descripción</th><th>Monto</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="7" class="empty">Sin gastos</td></tr>'}</tbody></table>
+    </div>`;
+}
+
+/* ============================ MODAL / FORMS ============================ */
+let onSave=null;
+function openModal(title, bodyHtml, saveFn){
+  $('#modalTitle').textContent=title;
+  $('#modalBody').innerHTML=bodyHtml;
+  $('#modalErr').textContent='';
+  onSave=saveFn;
+  $('#modalBg').classList.add('show');
+}
+function closeModal(){ $('#modalBg').classList.remove('show'); onSave=null; }
+$('#modalCancel').onclick=closeModal;
+$('#modalBg').onclick=(e)=>{ if(e.target===$('#modalBg')) closeModal(); };
+$('#modalSave').onclick=async ()=>{
+  if(!onSave) return;
+  try{
+    $('#modalSave').disabled=true;
+    await onSave();
+    $('#modalSave').disabled=false;
+    closeModal();
+    await loadAll();
+    render(document.querySelector('#tabs button.active').dataset.tab);
+  }catch(err){
+    $('#modalSave').disabled=false;
+    $('#modalErr').textContent = err.message||String(err);
+  }
+};
+const val=(id)=>{ const el=document.getElementById(id); return el?el.value:''; };
+const numOrNull=(v)=> v===''?null:Number(v);
+
+function selOptions(arr, sel, blank){
+  return (blank?`<option value="">${blank}</option>`:'') +
+    arr.map(o=>`<option value="${o.v}" ${o.v==sel?'selected':''}>${esc(o.t)}</option>`).join('');
+}
+const monedaSel=(sel)=>selOptions([{v:'ARS',t:'Pesos (ARS)'},{v:'USD',t:'Dólares (USD)'}],sel||'ARS');
+const estadoLocalSel=(sel)=>selOptions([{v:'ocupado',t:'Ocupado'},{v:'libre',t:'Libre'},{v:'refaccion',t:'En refacción'}],sel||'libre');
+
+/* ---- Local ---- */
+window.openLocal=(id)=>{
+  const r=DATA.locales.find(x=>x.id==id)||{};
+  openModal(id?'Editar local':'Nuevo local',`
+    <div class="field"><label>Nombre</label><input id="f_nombre" value="${esc(r.nombre||'')}"></div>
+    <div class="row">
+      <div class="field"><label>Superficie (m²)</label><input id="f_sup" type="number" step="0.01" value="${esc(r.superficie_m2||'')}"></div>
+      <div class="field"><label>Estado</label><select id="f_estado">${estadoLocalSel(r.estado)}</select></div>
+    </div>
+    <div class="field"><label>Descripción</label><textarea id="f_desc" rows="2">${esc(r.descripcion||'')}</textarea></div>
+  `, async ()=>{
+    const payload={nombre:val('f_nombre'),superficie_m2:numOrNull(val('f_sup')),
+      estado:val('f_estado'),descripcion:val('f_desc')};
+    if(!payload.nombre) throw new Error('El nombre es obligatorio.');
+    const q = id ? sb.from('locales').update(payload).eq('id',id)
+                 : sb.from('locales').insert(payload);
+    const {error}=await q; if(error) throw error;
+  });
+};
+
+/* ---- Inquilino ---- */
+window.openInquilino=(id)=>{
+  const r=DATA.inquilinos.find(x=>x.id==id)||{};
+  openModal(id?'Editar inquilino':'Nuevo inquilino',`
+    <div class="field"><label>Nombre / Razón social</label><input id="f_nombre" value="${esc(r.nombre||'')}"></div>
+    <div class="row">
+      <div class="field"><label>DNI / CUIT</label><input id="f_dni" value="${esc(r.dni_cuit||'')}"></div>
+      <div class="field"><label>Teléfono</label><input id="f_tel" value="${esc(r.telefono||'')}"></div>
+    </div>
+    <div class="field"><label>Email</label><input id="f_email" value="${esc(r.email||'')}"></div>
+    <div class="field"><label>Domicilio</label><input id="f_dom" value="${esc(r.domicilio||'')}"></div>
+    <div class="field"><label>Notas</label><textarea id="f_notas" rows="2">${esc(r.notas||'')}</textarea></div>
+  `, async ()=>{
+    const payload={nombre:val('f_nombre'),dni_cuit:val('f_dni'),telefono:val('f_tel'),
+      email:val('f_email'),domicilio:val('f_dom'),notas:val('f_notas')};
+    if(!payload.nombre) throw new Error('El nombre es obligatorio.');
+    const q=id?sb.from('inquilinos').update(payload).eq('id',id):sb.from('inquilinos').insert(payload);
+    const {error}=await q; if(error) throw error;
+  });
+};
+
+/* ---- Contrato ---- */
+window.openContrato=(id)=>{
+  const r=DATA.contratos.find(x=>x.id==id)||{};
+  const locs=DATA.locales.map(l=>({v:l.id,t:l.nombre}));
+  const inqs=DATA.inquilinos.map(i=>({v:i.id,t:i.nombre}));
+  openModal(id?'Editar contrato':'Nuevo contrato',`
+    <div class="row">
+      <div class="field"><label>Local</label><select id="f_local">${selOptions(locs,r.local_id,'—')}</select></div>
+      <div class="field"><label>Inquilino</label><select id="f_inq">${selOptions(inqs,r.inquilino_id,'—')}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Alquiler mensual</label><input id="f_monto" type="number" step="0.01" value="${esc(r.monto_alquiler||'')}"></div>
+      <div class="field"><label>Moneda</label><select id="f_moneda">${monedaSel(r.moneda)}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Inicio</label><input id="f_ini" type="date" value="${esc(r.fecha_inicio||'')}"></div>
+      <div class="field"><label>Fin</label><input id="f_fin" type="date" value="${esc(r.fecha_fin||'')}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Día de vencimiento</label><input id="f_dia" type="number" min="1" max="31" value="${esc(r.dia_vencimiento||10)}"></div>
+      <div class="field"><label>Depósito/garantía</label><input id="f_dep" type="number" step="0.01" value="${esc(r.deposito_garantia||'')}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Ajuste (período)</label><input id="f_ajp" placeholder="ej: trimestral" value="${esc(r.ajuste_periodo||'')}"></div>
+      <div class="field"><label>Ajuste (%)</label><input id="f_ajpc" type="number" step="0.01" value="${esc(r.ajuste_porcentaje||'')}"></div>
+    </div>
+    <div class="field"><label>Estado</label><select id="f_estado">${selOptions([{v:'activo',t:'Activo'},{v:'pendiente',t:'Pendiente'},{v:'finalizado',t:'Finalizado'}],r.estado||'activo')}</select></div>
+    <div class="field"><label>Notas</label><textarea id="f_notas" rows="2">${esc(r.notas||'')}</textarea></div>
+  `, async ()=>{
+    const payload={
+      local_id:numOrNull(val('f_local')), inquilino_id:numOrNull(val('f_inq')),
+      monto_alquiler:Number(val('f_monto')||0), moneda:val('f_moneda'),
+      fecha_inicio:val('f_ini')||null, fecha_fin:val('f_fin')||null,
+      dia_vencimiento:numOrNull(val('f_dia')), deposito_garantia:numOrNull(val('f_dep')),
+      ajuste_periodo:val('f_ajp'), ajuste_porcentaje:numOrNull(val('f_ajpc')),
+      estado:val('f_estado'), notas:val('f_notas')
+    };
+    const q=id?sb.from('contratos').update(payload).eq('id',id):sb.from('contratos').insert(payload);
+    const {error}=await q; if(error) throw error;
+    // Actualiza estado del local a ocupado si el contrato está activo
+    if(payload.estado==='activo' && payload.local_id){
+      await sb.from('locales').update({estado:'ocupado'}).eq('id',payload.local_id);
+    }
+  });
+};
+
+/* ---- Pago ---- */
+window.openPago=(id)=>{
+  const r=DATA.pagos.find(x=>x.id==id)||{};
+  const cons=DATA.contratos.map(c=>({v:c.id,t:contratoLabel(c)+' · '+money(c.monto_alquiler,c.moneda)}));
+  const ym=new Date().toISOString().slice(0,7);
+  openModal(id?'Editar pago':'Registrar pago',`
+    <div class="field"><label>Contrato</label><select id="f_con">${selOptions(cons,r.contrato_id,'—')}</select></div>
+    <div class="row">
+      <div class="field"><label>Período (mes)</label><input id="f_per" type="month" value="${esc(r.periodo||ym)}"></div>
+      <div class="field"><label>Estado</label><select id="f_estado">${selOptions([{v:'pagado',t:'Pagado'},{v:'pendiente',t:'Pendiente'},{v:'parcial',t:'Parcial'}],r.estado||'pagado')}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Monto</label><input id="f_monto" type="number" step="0.01" value="${esc(r.monto||'')}"></div>
+      <div class="field"><label>Moneda</label><select id="f_moneda">${monedaSel(r.moneda)}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Fecha de pago</label><input id="f_fecha" type="date" value="${esc(r.fecha_pago||'')}"></div>
+      <div class="field"><label>Medio</label><input id="f_medio" placeholder="efectivo/transf." value="${esc(r.medio||'')}"></div>
+    </div>
+    <div class="field"><label>N° recibo</label><input id="f_recibo" value="${esc(r.recibo_nro||'')}"></div>
+  `, async ()=>{
+    const con=DATA.contratos.find(c=>c.id==val('f_con'));
+    const payload={
+      contrato_id:numOrNull(val('f_con')),
+      periodo:val('f_per'),
+      monto:Number(val('f_monto')|| (con?con.monto_alquiler:0)),
+      moneda:val('f_moneda'), fecha_pago:val('f_fecha')||null,
+      medio:val('f_medio'), estado:val('f_estado'), recibo_nro:val('f_recibo')
+    };
+    if(!payload.contrato_id) throw new Error('Elegí un contrato.');
+    if(!payload.periodo) throw new Error('Indicá el período.');
+    const q=id?sb.from('pagos').update(payload).eq('id',id):sb.from('pagos').insert(payload);
+    const {error}=await q; if(error) throw error;
+  });
+};
+
+/* ---- Gasto ---- */
+window.openGasto=(id)=>{
+  const r=DATA.gastos.find(x=>x.id==id)||{};
+  const locs=DATA.locales.map(l=>({v:l.id,t:l.nombre}));
+  const cats=['luz','agua','gas','impuesto','expensa','mantenimiento','otro'].map(c=>({v:c,t:c[0].toUpperCase()+c.slice(1)}));
+  openModal(id?'Editar gasto':'Nuevo gasto',`
+    <div class="row">
+      <div class="field"><label>Categoría</label><select id="f_cat">${selOptions(cats,r.categoria)}</select></div>
+      <div class="field"><label>Local</label><select id="f_local">${selOptions(locs,r.local_id,'General (edificio)')}</select></div>
+    </div>
+    <div class="field"><label>Descripción</label><input id="f_desc" value="${esc(r.descripcion||'')}"></div>
+    <div class="row">
+      <div class="field"><label>Monto</label><input id="f_monto" type="number" step="0.01" value="${esc(r.monto||'')}"></div>
+      <div class="field"><label>Moneda</label><select id="f_moneda">${monedaSel(r.moneda)}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Fecha</label><input id="f_fecha" type="date" value="${esc(r.fecha||'')}"></div>
+      <div class="field"><label>Estado</label><select id="f_estado">${selOptions([{v:'pagado',t:'Pagado'},{v:'pendiente',t:'Pendiente'}],r.estado||'pagado')}</select></div>
+    </div>
+    <div class="field"><label>Pagado por</label><input id="f_por" placeholder="propietario / inquilino" value="${esc(r.pagado_por||'')}"></div>
+  `, async ()=>{
+    const payload={
+      categoria:val('f_cat'), local_id:numOrNull(val('f_local')),
+      descripcion:val('f_desc'), monto:Number(val('f_monto')||0), moneda:val('f_moneda'),
+      fecha:val('f_fecha')||null, estado:val('f_estado'), pagado_por:val('f_por')
+    };
+    const q=id?sb.from('gastos').update(payload).eq('id',id):sb.from('gastos').insert(payload);
+    const {error}=await q; if(error) throw error;
+  });
+};
+
+/* ---- Borrar ---- */
+window.delRow=async (table,id)=>{
+  if(!confirm('¿Borrar este registro? Esta acción no se puede deshacer.')) return;
+  const {error}=await sb.from(table).delete().eq('id',id);
+  if(error){ alert(error.message); return; }
+  await loadAll();
+  render(document.querySelector('#tabs button.active').dataset.tab);
+};
+
+boot();
+</script>
+</body>
+</html>
