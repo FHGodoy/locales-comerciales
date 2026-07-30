@@ -168,20 +168,37 @@ const fdate = (d)=> d ? new Date(d+'T00:00:00').toLocaleDateString('es-AR') : '�
 let DATA = {locales:[], inquilinos:[], contratos:[], pagos:[], gastos:[]};
 
 /* ---------- Arranque ---------- */
+// Limpia la URL: saca espacios, /rest/v1, /auth/v1 y barras finales.
+function cleanUrl(u){
+  return String(u||'').trim()
+    .replace(/\/rest\/v1\/?$/,'')
+    .replace(/\/auth\/v1\/?$/,'')
+    .replace(/\/+$/,'');
+}
+const CLEAN_URL = cleanUrl(SUPABASE_URL);
 function boot(){
-  const ok = SUPABASE_URL && !SUPABASE_URL.includes('PEGAR') &&
+  const ok = CLEAN_URL && !CLEAN_URL.includes('PEGAR') &&
              SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes('PEGAR');
   if(!ok){ $('#setupWarn').style.display='block'; return; }
-  sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  sb = supabase.createClient(CLEAN_URL, SUPABASE_ANON_KEY.trim());
   sb.auth.getSession().then(({data})=>{ if(data.session) enterApp(); });
 }
 $('#btnLogin').onclick = async ()=>{
   $('#loginErr').textContent='';
   const email=$('#email').value.trim(), password=$('#pass').value;
   if(!sb){ $('#loginErr').textContent='Configurá Supabase primero.'; return; }
-  const {error}= await sb.auth.signInWithPassword({email,password});
-  if(error){ $('#loginErr').textContent = error.message; return; }
-  enterApp();
+  try{
+    const {error}= await sb.auth.signInWithPassword({email,password});
+    if(error){
+      $('#loginErr').textContent = (error.status?('['+error.status+'] '):'') + error.message;
+      console.error('Login error', error, 'URL:', CLEAN_URL);
+      return;
+    }
+    enterApp();
+  }catch(e){
+    $('#loginErr').textContent = 'Error de conexión: '+(e.message||e);
+    console.error(e, 'URL:', CLEAN_URL);
+  }
 };
 $('#pass').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#btnLogin').click(); });
 $('#btnLogout').onclick = async ()=>{ await sb.auth.signOut(); location.reload(); };
