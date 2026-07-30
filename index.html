@@ -356,20 +356,21 @@ function viewContratos(){
       <td>${esc(inqName(c.inquilino_id))}</td>
       <td>${money(c.monto_alquiler,c.moneda)}</td>
       <td>${fdate(c.fecha_inicio)} → ${fdate(c.fecha_fin)}</td>
-      <td>${c.dia_vencimiento?('día '+c.dia_vencimiento):'—'}</td>
+      <td>${idxLabel(c.ajuste_indice)}${c.ajuste_periodo?` <span class="muted">c/${esc(c.ajuste_periodo)}m</span>`:''}</td>
       <td><span class="chip ${c.estado}">${c.estado}</span></td>
       <td class="actbtns">
+        <button class="btn sec sm" onclick="openProyeccion(${c.id})">Proyección</button>
         <button class="btn sec sm" onclick="openContrato(${c.id})">Editar</button>
         <button class="btn danger sm" onclick="delRow('contratos',${c.id})">Borrar</button>
       </td>
     </tr>`).join('');
   return `
     <div class="toolbar">
-      <div><h2 class="sec-title">Contratos</h2><p class="sub" style="margin:0">Alquileres, plazos y ajustes.</p></div>
+      <div><h2 class="sec-title">Contratos</h2><p class="sub" style="margin:0">Alquileres, plazos, índices de ajuste y proyección de incrementos.</p></div>
       <button class="btn" onclick="openContrato()">+ Nuevo contrato</button>
     </div>
     <div class="tbl-wrap">
-      <table><thead><tr><th>Local</th><th>Inquilino</th><th>Alquiler</th><th>Vigencia</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
+      <table><thead><tr><th>Local</th><th>Inquilino</th><th>Alquiler</th><th>Vigencia</th><th>Ajuste</th><th>Estado</th><th></th></tr></thead>
       <tbody>${rows||'<tr><td colspan="7" class="empty">Sin contratos</td></tr>'}</tbody></table>
     </div>`;
 }
@@ -429,14 +430,20 @@ function viewGastos(){
 
 /* ============================ MODAL / FORMS ============================ */
 let onSave=null;
-function openModal(title, bodyHtml, saveFn){
+function openModal(title, bodyHtml, saveFn, opts){
+  opts=opts||{};
   $('#modalTitle').textContent=title;
   $('#modalBody').innerHTML=bodyHtml;
   $('#modalErr').textContent='';
   onSave=saveFn;
+  $('#modalSave').style.display = opts.hideSave ? 'none' : '';
+  $('#modalCancel').textContent = opts.hideSave ? 'Cerrar' : 'Cancelar';
   $('#modalBg').classList.add('show');
 }
-function closeModal(){ $('#modalBg').classList.remove('show'); onSave=null; }
+function closeModal(){
+  $('#modalBg').classList.remove('show'); onSave=null;
+  $('#modalSave').style.display=''; $('#modalCancel').textContent='Cancelar';
+}
 $('#modalCancel').onclick=closeModal;
 $('#modalBg').onclick=(e)=>{ if(e.target===$('#modalBg')) closeModal(); };
 $('#modalSave').onclick=async ()=>{
@@ -527,9 +534,16 @@ window.openContrato=(id)=>{
       <div class="field"><label>Depósito/garantía</label><input id="f_dep" type="number" step="0.01" value="${esc(r.deposito_garantia||'')}"></div>
     </div>
     <div class="row">
-      <div class="field"><label>Ajuste (período)</label><input id="f_ajp" placeholder="ej: trimestral" value="${esc(r.ajuste_periodo||'')}"></div>
-      <div class="field"><label>Ajuste (%)</label><input id="f_ajpc" type="number" step="0.01" value="${esc(r.ajuste_porcentaje||'')}"></div>
+      <div class="field"><label>Índice de ajuste</label><select id="f_indice">${selOptions([
+        {v:'ICL',t:'ICL (Contratos de Locación · BCRA)'},
+        {v:'IPC',t:'IPC (Inflación · INDEC)'},
+        {v:'CASA_PROPIA',t:'Índice Casa Propia'},
+        {v:'FIJO',t:'Porcentaje fijo'},
+        {v:'NINGUNO',t:'Sin ajuste'}
+      ],r.ajuste_indice||'ICL')}</select></div>
+      <div class="field"><label>Frecuencia (meses)</label><input id="f_ajp" type="number" min="1" max="12" placeholder="ej: 3" value="${esc(r.ajuste_periodo||3)}"></div>
     </div>
+    <div class="field"><label>Ajuste % (solo si elegiste "Porcentaje fijo")</label><input id="f_ajpc" type="number" step="0.01" value="${esc(r.ajuste_porcentaje||'')}"></div>
     <div class="field"><label>Estado</label><select id="f_estado">${selOptions([{v:'activo',t:'Activo'},{v:'pendiente',t:'Pendiente'},{v:'finalizado',t:'Finalizado'}],r.estado||'activo')}</select></div>
     <div class="field"><label>Notas</label><textarea id="f_notas" rows="2">${esc(r.notas||'')}</textarea></div>
   `, async ()=>{
@@ -538,6 +552,7 @@ window.openContrato=(id)=>{
       monto_alquiler:Number(val('f_monto')||0), moneda:val('f_moneda'),
       fecha_inicio:val('f_ini')||null, fecha_fin:val('f_fin')||null,
       dia_vencimiento:numOrNull(val('f_dia')), deposito_garantia:numOrNull(val('f_dep')),
+      ajuste_indice:val('f_indice'),
       ajuste_periodo:val('f_ajp'), ajuste_porcentaje:numOrNull(val('f_ajpc')),
       estado:val('f_estado'), notas:val('f_notas')
     };
@@ -615,6 +630,177 @@ window.openGasto=(id)=>{
     const q=id?sb.from('gastos').update(payload).eq('id',id):sb.from('gastos').insert(payload);
     const {error}=await q; if(error) throw error;
   });
+};
+
+/* ============================ PROYECCIÓN DE INCREMENTOS ============================ */
+/*
+  Métodos de cálculo (fuentes oficiales):
+  · ICL (BCRA): índice diario que combina 50% IPC y 50% RIPTE (salarios).
+    Nuevo alquiler = alquiler vigente × (ICL fecha de ajuste ÷ ICL ajuste anterior).
+    Datos: API BCRA, serie idVariable 40.
+  · IPC (INDEC): inflación mensual. Factor del período = producto de
+    (1 + inflación_mes/100) de cada mes entre ajustes. Datos: API ArgentinaDatos.
+  · Casa Propia: coeficiente mensual (menor entre promedio 12m de variación
+    salarial CVS con aforo 0,9 y promedio 12m de inflación/CER). Factor del
+    período = producto de los coeficientes mensuales. No tiene API pública:
+    se estima con un % mensual o se cargan los coeficientes publicados en
+    argentina.gob.ar.
+  · Porcentaje fijo: factor = 1 + %/100 en cada ajuste.
+*/
+const idxLabel=(i)=>({ICL:'ICL',IPC:'IPC',CASA_PROPIA:'Casa Propia',FIJO:'% fijo',NINGUNO:'—'}[i]||'—');
+let SERIES={ICL:null,IPC:null}; // cache de series descargadas
+
+async function fetchICL(desde){
+  // Serie diaria ICL del BCRA (idVariable 40)
+  const hasta=new Date().toISOString().slice(0,10);
+  const url=`https://api.bcra.gob.ar/estadisticas/v3.0/monetarias/40?desde=${desde}&hasta=${hasta}&limit=3000`;
+  const r=await fetch(url); if(!r.ok) throw new Error('BCRA HTTP '+r.status);
+  const j=await r.json();
+  const arr=(j.results||[]).map(x=>({fecha:x.fecha,valor:Number(x.valor)}))
+    .sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  if(!arr.length) throw new Error('BCRA sin datos');
+  return arr;
+}
+async function fetchIPC(){
+  // Inflación mensual (INDEC, vía ArgentinaDatos)
+  const r=await fetch('https://api.argentinadatos.com/v1/finanzas/indices/inflacion');
+  if(!r.ok) throw new Error('ArgentinaDatos HTTP '+r.status);
+  const j=await r.json();
+  const arr=(j||[]).map(x=>({mes:String(x.fecha).slice(0,7),valor:Number(x.valor)}))
+    .sort((a,b)=>a.mes.localeCompare(b.mes));
+  if(!arr.length) throw new Error('sin datos IPC');
+  return arr;
+}
+const iclAt=(serie,fecha)=>{ let v=null; for(const p of serie){ if(p.fecha<=fecha) v=p.valor; else break; } return v; };
+function addMonthsISO(iso,m){
+  const [y,mo,d]=iso.split('-').map(Number);
+  const dt=new Date(Date.UTC(y,mo-1+m,1));
+  const last=new Date(Date.UTC(dt.getUTCFullYear(),dt.getUTCMonth()+1,0)).getUTCDate();
+  dt.setUTCDate(Math.min(d,last));
+  return dt.toISOString().slice(0,10);
+}
+// meses 'YYYY-MM' del intervalo (exclusivo el mes de 'desde', inclusivo el de 'hasta')
+function monthsBetween(desde,hasta){
+  const out=[]; let m=desde.slice(0,7);
+  while(m<hasta.slice(0,7)){
+    const [y,mm]=m.split('-').map(Number);
+    m=(mm===12?(y+1)+'-01':y+'-'+String(mm+1).padStart(2,'0'));
+    out.push(m);
+  }
+  return out;
+}
+
+window.openProyeccion=(id)=>{
+  const c=DATA.contratos.find(x=>x.id==id); if(!c) return;
+  if(!c.fecha_inicio){ alert('El contrato no tiene fecha de inicio.'); return; }
+  const idxOpts=[
+    {v:'ICL',t:'ICL (BCRA · automático)'},
+    {v:'IPC',t:'IPC (INDEC · automático)'},
+    {v:'CASA_PROPIA',t:'Casa Propia (estimado)'},
+    {v:'FIJO',t:'Porcentaje fijo'}
+  ];
+  const idx0 = (c.ajuste_indice && c.ajuste_indice!=='NINGUNO') ? c.ajuste_indice : 'ICL';
+  openModal('Proyección · '+contratoLabel(c),`
+    <div class="row">
+      <div class="field"><label>Índice</label><select id="p_idx">${selOptions(idxOpts,idx0)}</select></div>
+      <div class="field"><label>Frecuencia (meses)</label><input id="p_frec" type="number" min="1" max="12" value="${esc(parseInt(c.ajuste_periodo)||3)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Horizonte (meses)</label><input id="p_hor" type="number" min="3" max="60" value="24"></div>
+      <div class="field"><label>Estimación futura (% mensual)</label><input id="p_est" type="number" step="0.1" value="${esc(c.ajuste_indice==='FIJO'&&c.ajuste_porcentaje?c.ajuste_porcentaje:2)}"></div>
+    </div>
+    <p class="muted" id="p_info" style="font-size:12px;margin:4px 0 10px"></p>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+      <button class="btn sec sm" id="p_calc" type="button">Calcular proyección</button>
+      <span class="muted" id="p_status" style="font-size:12px"></span>
+    </div>
+    <div id="p_out"></div>
+  `, null, {hideSave:true});
+
+  const info={
+    ICL:'ICL = 50% inflación (IPC) + 50% salarios (RIPTE). Se descarga la serie oficial diaria del BCRA. Ajuste = ICL fecha de ajuste ÷ ICL del ajuste anterior. Los tramos futuros se estiman con el % mensual indicado (precargado con el promedio reciente del índice).',
+    IPC:'Se descarga la inflación mensual oficial (INDEC). Ajuste = producto de (1 + inflación de cada mes) del período. Los meses futuros usan el % mensual estimado.',
+    CASA_PROPIA:'Casa Propia toma el menor entre el promedio 12 meses de la variación salarial (CVS, con aforo del 90%) y el promedio 12 meses de inflación. Suele dar levemente menos que el IPC. No tiene API pública: la proyección usa el % mensual estimado. Coeficientes oficiales: argentina.gob.ar → Casa Propia.',
+    FIJO:'Cada ajuste aplica el porcentaje indicado en "Estimación futura": nuevo alquiler = vigente × (1 + %/100).'
+  };
+  const setInfo=()=>{ document.getElementById('p_info').textContent = info[val('p_idx')]||''; };
+  document.getElementById('p_idx').onchange=setInfo; setInfo();
+
+  document.getElementById('p_calc').onclick=async ()=>{
+    const st=document.getElementById('p_status'), out=document.getElementById('p_out');
+    const tipo=val('p_idx');
+    const frec=Math.max(1,parseInt(val('p_frec'))||3);
+    const hor=Math.max(3,parseInt(val('p_hor'))||24);
+    let est=Number(val('p_est'));
+    out.innerHTML=''; st.textContent='Calculando…';
+    const hoy=new Date().toISOString().slice(0,10);
+    let fuente='estimación manual';
+
+    try{
+      if(tipo==='ICL' && !SERIES.ICL){
+        st.textContent='Descargando serie ICL del BCRA…';
+        try{ SERIES.ICL=await fetchICL(addMonthsISO(c.fecha_inicio,-1)); fuente='BCRA (oficial) + estimación futura'; }
+        catch(e){ st.textContent='No se pudo conectar al BCRA ('+e.message+'). Se usa solo la estimación mensual.'; }
+      } else if(tipo==='ICL' && SERIES.ICL){ fuente='BCRA (oficial) + estimación futura'; }
+      if(tipo==='IPC' && !SERIES.IPC){
+        st.textContent='Descargando inflación mensual (INDEC)…';
+        try{ SERIES.IPC=await fetchIPC(); fuente='INDEC vía ArgentinaDatos + estimación futura'; }
+        catch(e){ st.textContent='No se pudo conectar a ArgentinaDatos ('+e.message+'). Se usa solo la estimación mensual.'; }
+      } else if(tipo==='IPC' && SERIES.IPC){ fuente='INDEC vía ArgentinaDatos + estimación futura'; }
+
+      // precargar estimación con promedio real reciente si hay datos
+      if(tipo==='IPC' && SERIES.IPC && !document.getElementById('p_est').dataset.touched){
+        const u=SERIES.IPC.slice(-3);
+        est=Math.round((u.reduce((s,x)=>s+x.valor,0)/u.length)*10)/10;
+        document.getElementById('p_est').value=est;
+      }
+      if(tipo==='ICL' && SERIES.ICL && !document.getElementById('p_est').dataset.touched){
+        const s=SERIES.ICL, a=iclAt(s,addMonthsISO(hoy,-3)), b=s[s.length-1].valor;
+        if(a){ est=Math.round((Math.pow(b/a,1/3)-1)*1000)/10; document.getElementById('p_est').value=est; }
+      }
+
+      // fechas de ajuste desde el inicio hasta inicio+horizonte
+      const fin=addMonthsISO(c.fecha_inicio,hor);
+      const fechas=[]; let f=addMonthsISO(c.fecha_inicio,frec);
+      while(f<=fin){ fechas.push(f); f=addMonthsISO(f,frec); }
+
+      let monto=Number(c.monto_alquiler)||0, prev=c.fecha_inicio;
+      const rows=[[fdate(c.fecha_inicio),'—',money(monto,c.moneda)+' (inicial)','']];
+      for(const fecha of fechas){
+        let factor=null, nota='';
+        if(tipo==='FIJO'){ factor=1+est/100; nota='% fijo'; }
+        else if(tipo==='ICL' && SERIES.ICL){
+          const a=iclAt(SERIES.ICL,prev), b=iclAt(SERIES.ICL,fecha);
+          if(a&&b&&fecha<=hoy){ factor=b/a; nota='dato oficial'; }
+          else if(a&&fecha>hoy){
+            const ult=SERIES.ICL[SERIES.ICL.length-1];
+            const base=(prev<=ult.fecha)?(ult.valor/iclAt(SERIES.ICL,prev)):1;
+            const mesesRest=Math.max(0,monthsBetween(prev<=ult.fecha?ult.fecha:prev,fecha).length);
+            factor=base*Math.pow(1+est/100,mesesRest); nota='estimado';
+          }
+        }
+        else if(tipo==='IPC' && SERIES.IPC){
+          factor=1; nota='dato oficial';
+          for(const m of monthsBetween(prev,fecha)){
+            const d=SERIES.IPC.find(x=>x.mes===m);
+            if(d) factor*=1+d.valor/100;
+            else { factor*=1+est/100; nota='parcialmente estimado'; }
+          }
+        }
+        if(factor===null){ factor=Math.pow(1+est/100,frec); nota='estimado'; }
+        monto*=factor;
+        rows.push([fdate(fecha),'+'+((factor-1)*100).toFixed(1)+'%',money(monto,c.moneda),nota]);
+        prev=fecha;
+      }
+      st.textContent='Fuente: '+fuente;
+      out.innerHTML=`<div class="tbl-wrap"><table>
+        <thead><tr><th>Fecha de ajuste</th><th>Incremento</th><th>Alquiler</th><th>Origen</th></tr></thead>
+        <tbody>${rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td><strong>${r[2]}</strong></td><td class="muted">${r[3]}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <p class="muted" style="font-size:11px;margin-top:8px">Los valores futuros son proyecciones estimadas, no valores oficiales. Verificá el índice del día del ajuste en la fuente oficial (BCRA / INDEC / argentina.gob.ar).</p>`;
+    }catch(e){ st.textContent='Error: '+(e.message||e); }
+  };
+  document.getElementById('p_est').oninput=function(){ this.dataset.touched='1'; };
 };
 
 /* ---- Borrar ---- */

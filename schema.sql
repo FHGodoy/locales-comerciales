@@ -42,8 +42,10 @@ create table if not exists public.contratos (
   monto_alquiler    numeric not null default 0,
   moneda            text not null default 'ARS' check (moneda in ('ARS','USD')),
   dia_vencimiento   int default 10,          -- día del mes en que vence el alquiler
-  ajuste_periodo    text,                    -- ej: 'trimestral', 'semestral', 'anual'
-  ajuste_porcentaje numeric,                 -- % de ajuste por período
+  ajuste_indice     text default 'ICL'
+                    check (ajuste_indice in ('ICL','IPC','CASA_PROPIA','FIJO','NINGUNO')),
+  ajuste_periodo    text,                    -- frecuencia en meses (ej: '3')
+  ajuste_porcentaje numeric,                 -- % por período (solo si ajuste_indice='FIJO')
   deposito_garantia numeric,
   estado            text not null default 'activo'
                     check (estado in ('activo','finalizado','pendiente')),
