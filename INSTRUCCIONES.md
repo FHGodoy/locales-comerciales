@@ -5,12 +5,19 @@ San Lorenzo Oeste y Paula Albarracín de Sarmiento Sur, Rawson (San Juan).
 Maneja inquilinos, contratos, pagos de alquiler, gastos/servicios y estado de
 ocupación, en pesos (ARS) y dólares (USD).
 
-Tenés dos archivos:
+Archivos incluidos:
 
 - **`index.html`** — la aplicación (se sube a Vercel).
-- **`schema.sql`** — crea las tablas en Supabase (se corre una sola vez).
+- **`schema.sql`** — crea las tablas en Supabase (solo si empezás de cero).
+- **`actualizar-bd.sql`** — si **ya** tenías la base creada antes, corré este
+  archivo una vez para agregar los índices de ajuste y las cuentas de servicios.
+- **`INSTRUCCIONES.md`** — este documento.
 
-Son unos 15 minutos. Seguí los pasos en orden.
+> **Si tu base ya está creada:** te alcanza con correr `actualizar-bd.sql` en
+> Supabase (SQL Editor → New query → pegar → Run) y volver a subir el
+> `index.html` a Vercel. El resto de los pasos ya los hiciste.
+
+Si empezás de cero, son unos 15 minutos. Seguí los pasos en orden.
 
 ---
 
@@ -88,6 +95,38 @@ La app pide email y contraseña para proteger los datos.
   Al guardar un contrato *activo*, el local pasa automáticamente a "ocupado".
 - **Pagos:** registrás cada cobro por mes y su estado (pagado / pendiente / parcial).
 - **Gastos:** luz, agua, impuestos, expensas y mantenimiento, por local o generales del edificio.
+- **Servicios:** números de cuenta de impuestos, agua y energía, con titular,
+  local asociado y aviso de medidores retirados con deuda. El botón ⧉ copia
+  el número de cuenta al portapapeles.
+
+### Proyección de incrementos
+
+En **Contratos** → botón **Proyección** calculás los aumentos futuros según el índice:
+
+| Índice | Cómo se calcula | Datos |
+|---|---|---|
+| **ICL** (BCRA) | 50% inflación (IPC) + 50% salarios (RIPTE). Ajuste = ICL del día de ajuste ÷ ICL del ajuste anterior | Serie oficial diaria del BCRA (automático) |
+| **IPC** (INDEC) | Producto de (1 + inflación mensual) de cada mes del período | Inflación mensual oficial (automático) |
+| **Casa Propia** | El menor entre el promedio 12 meses de variación salarial (CVS, aforo 90%) y el promedio 12 meses de inflación | Sin API pública: se estima con % mensual. Coeficientes oficiales en argentina.gob.ar |
+| **% fijo** | Nuevo alquiler = vigente × (1 + %/100) | Manual |
+
+Los tramos ya transcurridos usan datos oficiales; los futuros son estimaciones.
+Verificá siempre el índice del día del ajuste en la fuente oficial.
+
+## Cuentas registradas
+
+**Impuestos** — DGR: 042061303000000 · Municipalidad de Rawson: IM206130300000
+(ambos a nombre de Miguel Ángel Godoy).
+
+**Agua/cloaca** — OSSE: 119-0066581-000/6 (Miguel Ángel Godoy).
+
+**Energía activa (Naturgy)** — Local 1 esquina: 20004660492 · Local 2 Paula de
+Sarmiento: 20004660479 (ambos Miguel Ángel Godoy) · Local 3 San Lorenzo:
+20003841440 (Mercedes Alicia Iramain).
+
+**Energía retirada con deuda (Energía San Juan)** — Local 1: 20004513374
+(Abel Arroyo, ex inquilino) y 20003020493 (Mercedes Alicia Iramain) ·
+Local 2: 20000897544 (Rafael Godoy).
 
 ## Notas de seguridad
 

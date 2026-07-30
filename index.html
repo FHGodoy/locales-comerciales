@@ -134,6 +134,7 @@
       <button data-tab="contratos">Contratos</button>
       <button data-tab="pagos">Pagos</button>
       <button data-tab="gastos">Gastos</button>
+      <button data-tab="cuentas">Servicios</button>
     </nav>
     <button class="btn sec sm" id="btnLogout">Salir</button>
   </header>
@@ -165,7 +166,7 @@ const esc = (s)=> (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 const fdate = (d)=> d ? new Date(d+'T00:00:00').toLocaleDateString('es-AR') : '—';
 
 // cache
-let DATA = {locales:[], inquilinos:[], contratos:[], pagos:[], gastos:[]};
+let DATA = {locales:[], inquilinos:[], contratos:[], pagos:[], gastos:[], cuentas:[]};
 
 /* ---------- Arranque ---------- */
 // Limpia la URL: saca espacios, /rest/v1, /auth/v1 y barras finales.
@@ -219,16 +220,17 @@ document.querySelectorAll('#tabs button').forEach(b=>{
 
 /* ---------- Datos ---------- */
 async function loadAll(){
-  const [lo,inq,con,pa,ga] = await Promise.all([
+  const [lo,inq,con,pa,ga,cu] = await Promise.all([
     sb.from('locales').select('*').order('id'),
     sb.from('inquilinos').select('*').order('nombre'),
     sb.from('contratos').select('*').order('id',{ascending:false}),
     sb.from('pagos').select('*').order('periodo',{ascending:false}),
     sb.from('gastos').select('*').order('fecha',{ascending:false}),
+    sb.from('cuentas_servicio').select('*').order('tipo').order('id'),
   ]);
   DATA = {
     locales:lo.data||[], inquilinos:inq.data||[], contratos:con.data||[],
-    pagos:pa.data||[], gastos:ga.data||[]
+    pagos:pa.data||[], gastos:ga.data||[], cuentas:cu.data||[]
   };
 }
 const localName = id => (DATA.locales.find(l=>l.id==id)||{}).nombre || '—';
@@ -246,6 +248,7 @@ function render(tab){
   if(tab==='contratos')  return v.innerHTML = viewContratos();
   if(tab==='pagos')      return v.innerHTML = viewPagos();
   if(tab==='gastos')     return v.innerHTML = viewGastos();
+  if(tab==='cuentas')    return v.innerHTML = viewCuentas();
 }
 
 /* ---- Dashboard ---- */
@@ -296,6 +299,7 @@ function viewDashboard(){
       <div class="card"><div class="lbl">Gastos del mes</div><div class="big">${money(gARS,'ARS')}</div>
         ${gUSD?`<div class="muted">+ ${money(gUSD,'USD')}</div>`:''}</div>
     </div>
+    ${(DATA.cuentas||[]).filter(c=>c.con_deuda).length?`<div class="setup">⚠️ Hay ${(DATA.cuentas||[]).filter(c=>c.con_deuda).length} medidores retirados con deuda pendiente. Ver pestaña <strong>Servicios</strong>.</div>`:''}
     <h3 style="margin:0 0 12px">Locales</h3>
     <div class="grid cards">${locCards||'<p class="empty">No hay locales.</p>'}</div>
   `;
@@ -426,6 +430,57 @@ function viewGastos(){
       <table><thead><tr><th>Fecha</th><th>Categoría</th><th>Local</th><th>Descripción</th><th>Monto</th><th>Estado</th><th></th></tr></thead>
       <tbody>${rows||'<tr><td colspan="7" class="empty">Sin gastos</td></tr>'}</tbody></table>
     </div>`;
+}
+
+/* ---- Cuentas y servicios ---- */
+const TIPOS_CTA={impuesto:{t:'Impuestos',ico:'🏛️'},agua:{t:'Agua y cloaca',ico:'💧'},energia:{t:'Energía',ico:'⚡'}};
+function copiar(txt){
+  navigator.clipboard && navigator.clipboard.writeText(txt);
+}
+window.copiarCta=(n)=>{ copiar(n); };
+
+function ctaRow(c){
+  return `<tr>
+    <td><strong>${esc(c.organismo)}</strong>${c.observaciones?`<div class="muted" style="font-size:12px">${esc(c.observaciones)}</div>`:''}</td>
+    <td style="font-family:ui-monospace,monospace">${esc(c.nro_cuenta)}
+      <button class="btn sec sm" style="padding:2px 7px;margin-left:6px" title="Copiar" onclick="copiarCta('${esc(c.nro_cuenta)}')">⧉</button></td>
+    <td>${esc(c.titular||'—')}</td>
+    <td>${c.local_id?esc(localName(c.local_id)):'<span class="muted">Todo el inmueble</span>'}</td>
+    <td>${c.estado==='retirado'?'<span class="chip libre">retirado</span>':'<span class="chip ocupado">activo</span>'}
+        ${c.con_deuda?'<span class="chip pendiente">con deuda</span>':''}</td>
+    <td class="actbtns">
+      <button class="btn sec sm" onclick="openCuenta(${c.id})">Editar</button>
+      <button class="btn danger sm" onclick="delRow('cuentas_servicio',${c.id})">Borrar</button>
+    </td>
+  </tr>`;
+}
+function viewCuentas(){
+  const C=DATA.cuentas||[];
+  const deuda=C.filter(c=>c.con_deuda);
+  const bloque=(tipo, filtro)=>{
+    const arr=C.filter(c=>c.tipo===tipo && (filtro?filtro(c):true));
+    if(!arr.length) return '';
+    return `<div class="tbl-wrap" style="margin-bottom:18px"><table>
+      <thead><tr><th>Organismo / servicio</th><th>N° de cuenta</th><th>Titular</th><th>Local</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${arr.map(ctaRow).join('')}</tbody></table></div>`;
+  };
+  const seccion=(tipo,titulo,filtro)=>{
+    const html=bloque(tipo,filtro);
+    return html?`<h3 style="margin:22px 0 10px">${TIPOS_CTA[tipo].ico} ${titulo}</h3>${html}`:'';
+  };
+  return `
+    <div class="toolbar">
+      <div><h2 class="sec-title">Servicios e impuestos</h2>
+      <p class="sub" style="margin:0">Números de cuenta del inmueble y de cada local.</p></div>
+      <button class="btn" onclick="openCuenta()">+ Nueva cuenta</button>
+    </div>
+    ${deuda.length?`<div class="setup">⚠️ Hay ${deuda.length} medidor${deuda.length>1?'es':''} retirado${deuda.length>1?'s':''} con deuda pendiente de resolución.</div>`:''}
+    ${seccion('impuesto','Impuestos')}
+    ${seccion('agua','Agua y cloaca')}
+    ${seccion('energia','Suministros de energía activos',c=>c.estado==='activo')}
+    ${seccion('energia','Suministros de energía retirados con deuda',c=>c.estado==='retirado')}
+    ${C.length?'':'<p class="empty">Sin cuentas cargadas. Corré el archivo actualizar-bd.sql en Supabase.</p>'}
+  `;
 }
 
 /* ============================ MODAL / FORMS ============================ */
@@ -628,6 +683,41 @@ window.openGasto=(id)=>{
       fecha:val('f_fecha')||null, estado:val('f_estado'), pagado_por:val('f_por')
     };
     const q=id?sb.from('gastos').update(payload).eq('id',id):sb.from('gastos').insert(payload);
+    const {error}=await q; if(error) throw error;
+  });
+};
+
+/* ---- Cuenta de servicio ---- */
+window.openCuenta=(id)=>{
+  const r=(DATA.cuentas||[]).find(x=>x.id==id)||{};
+  const locs=DATA.locales.map(l=>({v:l.id,t:l.nombre}));
+  openModal(id?'Editar cuenta':'Nueva cuenta',`
+    <div class="row">
+      <div class="field"><label>Tipo</label><select id="c_tipo">${selOptions(
+        [{v:'impuesto',t:'Impuesto'},{v:'agua',t:'Agua / cloaca'},{v:'energia',t:'Energía'}],r.tipo||'energia')}</select></div>
+      <div class="field"><label>Organismo / empresa</label><input id="c_org" value="${esc(r.organismo||'')}" placeholder="ej: Naturgy"></div>
+    </div>
+    <div class="field"><label>N° de cuenta / medidor</label><input id="c_nro" value="${esc(r.nro_cuenta||'')}"></div>
+    <div class="field"><label>Titular</label><input id="c_tit" value="${esc(r.titular||'')}"></div>
+    <div class="row">
+      <div class="field"><label>Local</label><select id="c_local">${selOptions(locs,r.local_id,'Todo el inmueble')}</select></div>
+      <div class="field"><label>Estado</label><select id="c_estado">${selOptions(
+        [{v:'activo',t:'Activo'},{v:'retirado',t:'Retirado'}],r.estado||'activo')}</select></div>
+    </div>
+    <div class="field"><label>¿Tiene deuda?</label><select id="c_deuda">${selOptions(
+      [{v:'no',t:'No'},{v:'si',t:'Sí, con deuda pendiente'}], r.con_deuda?'si':'no')}</select></div>
+    <div class="field"><label>Observaciones</label><textarea id="c_obs" rows="2">${esc(r.observaciones||'')}</textarea></div>
+  `, async ()=>{
+    const payload={
+      tipo:val('c_tipo'), organismo:val('c_org'), nro_cuenta:val('c_nro'),
+      titular:val('c_tit'), local_id:numOrNull(val('c_local')),
+      estado:val('c_estado'), con_deuda: val('c_deuda')==='si',
+      observaciones:val('c_obs')
+    };
+    if(!payload.organismo) throw new Error('Indicá el organismo o empresa.');
+    if(!payload.nro_cuenta) throw new Error('Indicá el número de cuenta.');
+    const q=id?sb.from('cuentas_servicio').update(payload).eq('id',id)
+              :sb.from('cuentas_servicio').insert(payload);
     const {error}=await q; if(error) throw error;
   });
 };
