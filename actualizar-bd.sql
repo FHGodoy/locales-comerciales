@@ -145,6 +145,35 @@ drop policy if exists "acceso_autenticado" on public.ajustes_contrato;
 create policy "acceso_autenticado" on public.ajustes_contrato
   for all to authenticated using (true) with check (true);
 
+-- ---------- 6) Facturas de servicios: vencimiento y período ----------
+alter table public.gastos add column if not exists vencimiento date;
+alter table public.gastos add column if not exists periodo text;         -- ej: '2026-08'
+alter table public.gastos add column if not exists nro_cuenta text;
+alter table public.gastos add column if not exists cuenta_id bigint
+  references public.cuentas_servicio(id) on delete set null;
+alter table public.gastos add column if not exists a_cargo text default 'inquilino'
+  check (a_cargo in ('inquilino','propietario'));
+
+-- URL de consulta de cada servicio (para el acceso directo desde la app)
+alter table public.cuentas_servicio add column if not exists url_consulta text;
+alter table public.cuentas_servicio add column if not exists a_cargo text default 'inquilino';
+
+update public.cuentas_servicio
+   set url_consulta='https://oficinavirtual.naturgysj.com.ar/publico/pagos/consulta'
+ where organismo ilike '%naturgy%';
+
+update public.cuentas_servicio
+   set url_consulta='https://facturaweb.osse.com.ar/'
+ where organismo ilike '%osse%' or tipo='agua';
+
+update public.cuentas_servicio
+   set url_consulta='https://municipioderawson.gob.ar/geoportal/'
+ where organismo ilike '%municip%';
+
+-- El impuesto inmobiliario provincial (DGR) es a cargo del LOCADOR (cláusula 5ª)
+update public.cuentas_servicio set a_cargo='propietario'
+ where organismo ilike '%rentas%' or organismo ilike '%DGR%';
+
 -- Refresca el caché de Supabase para que la app vea las tablas nuevas.
 -- (Sin esto puede aparecer: "Could not find the table in the schema cache")
 notify pgrst, 'reload schema';

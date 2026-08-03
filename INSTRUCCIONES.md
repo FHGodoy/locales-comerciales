@@ -184,7 +184,9 @@ El Resumen muestra avisos ordenados por urgencia:
 - 🔴 En mora (pasado el día 10), con la deuda estimada con intereses
 - 🔵 Ajuste de canon dentro de los próximos 30 días
 - 🟠 Vencimiento de contrato dentro de los próximos 90 días
-- 🔴 Servicios impagos, marcando los que superan los 30 días para acreditar
+- 🔴 Facturas vencidas, marcando las que superan los 30 días para acreditar
+- 🟠 Facturas por vencer (7 días o menos)
+- 🔵 Servicios del mes que todavía no se consultaron
 - 🟠 Medidores retirados con deuda
 
 ### Cálculo de intereses por mora
@@ -198,6 +200,37 @@ En **Contratos** → botón **Mora**. Muestra por separado:
 La tasa del BNA es un campo editable (valor inicial 75% anual): actualizala con la
 tasa vigente antes de usar el cálculo en un reclamo. El resultado es orientativo,
 consultá a tu abogado antes de una acción formal.
+
+## Facturas de servicios
+
+En **Gastos** hay un panel con las facturas del mes en curso. Cada tarjeta muestra
+el servicio, el local y su número de cuenta, con tres estados: *sin consultar*,
+*a pagar* (con importe y vencimiento) o *pagada*.
+
+**Cómo cargar una factura:**
+
+1. Tocá **Consultar**. La app copia el número de cuenta al portapapeles y abre
+   el sitio del servicio en otra pestaña.
+2. Pegá el número (Ctrl+V) en el campo del sitio y consultá.
+3. Volvé a la app: el formulario ya está abierto con el servicio y el local
+   cargados. Escribí el importe y la fecha de vencimiento, y guardá.
+
+| Servicio | Sitio | Campo a completar |
+|---|---|---|
+| Naturgy | oficinavirtual.naturgysj.com.ar | SUMINISTRO |
+| OSSE | facturaweb.osse.com.ar | Número de cuenta |
+| Municipalidad de Rawson | municipioderawson.gob.ar/geoportal | ID contribuyente → *Pagar ahora* |
+
+> **¿Por qué no se consultan solas?** Los tres sitios cargan sus datos por
+> JavaScript y requieren completar un formulario. Además, los navegadores impiden
+> por seguridad (CORS) que una página alojada en Vercel lea datos de otro dominio.
+> Automatizarlo requeriría un servidor intermedio que consulte los sitios, algo
+> más frágil (se rompe si cambian el sitio o agregan captcha) y que conviene
+> revisar contra los términos de uso de cada organismo.
+
+Una vez cargada la factura, la app se encarga del resto: avisa cuando está por
+vencer (7 días o menos), cuando ya venció, y cuando supera los 30 días del plazo
+para acreditar el pago que fija la cláusula 5ª del contrato.
 
 ## Prorrateo de servicios comunes
 

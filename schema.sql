@@ -80,6 +80,23 @@ create table if not exists public.pagos (
   created_at    timestamptz default now()
 );
 
+-- ---------- CUENTAS Y SERVICIOS (impuestos, agua, energía) ----------
+create table if not exists public.cuentas_servicio (
+  id            bigint generated always as identity primary key,
+  tipo          text not null,   -- impuesto / agua / energia
+  organismo     text not null,   -- DGR, Municipalidad, OSSE, Naturgy, Energía SJ
+  nro_cuenta    text not null,
+  titular       text,
+  local_id      bigint references public.locales(id) on delete set null,
+  estado        text not null default 'activo'
+                check (estado in ('activo','retirado')),
+  con_deuda     boolean not null default false,
+  url_consulta  text,            -- página donde se consulta la factura
+  a_cargo       text default 'inquilino',
+  observaciones text,
+  created_at    timestamptz default now()
+);
+
 -- ---------- GASTOS Y SERVICIOS ----------
 create table if not exists public.gastos (
   id           bigint generated always as identity primary key,
@@ -88,7 +105,12 @@ create table if not exists public.gastos (
   descripcion  text,
   monto        numeric not null default 0,
   moneda       text not null default 'ARS' check (moneda in ('ARS','USD')),
-  fecha        date,
+  fecha        date,                         -- fecha de la factura
+  vencimiento  date,                         -- fecha límite de pago
+  periodo      text,                         -- ej: '2026-08'
+  nro_cuenta   text,
+  cuenta_id    bigint references public.cuentas_servicio(id) on delete set null,
+  a_cargo      text default 'inquilino' check (a_cargo in ('inquilino','propietario')),
   pagado_por   text,                         -- propietario / inquilino
   estado       text not null default 'pagado'
                check (estado in ('pagado','pendiente')),
@@ -114,21 +136,6 @@ create table if not exists public.ajustes_contrato (
   unique (contrato_id, fecha)
 );
 
--- ---------- CUENTAS Y SERVICIOS (impuestos, agua, energía) ----------
-create table if not exists public.cuentas_servicio (
-  id            bigint generated always as identity primary key,
-  tipo          text not null,   -- impuesto / agua / energia
-  organismo     text not null,   -- DGR, Municipalidad, OSSE, Naturgy, Energía SJ
-  nro_cuenta    text not null,
-  titular       text,
-  local_id      bigint references public.locales(id) on delete set null,
-  estado        text not null default 'activo'
-                check (estado in ('activo','retirado')),
-  con_deuda     boolean not null default false,
-  observaciones text,
-  created_at    timestamptz default now()
-);
-
 -- ---------- DATOS INICIALES: los 3 locales ----------
 insert into public.locales (nombre, superficie_m2, estado, descripcion)
 select * from (values
@@ -140,21 +147,21 @@ where not exists (select 1 from public.locales);
 
 -- ---------- DATOS INICIALES: cuentas de servicios e impuestos ----------
 insert into public.cuentas_servicio
-  (tipo, organismo, nro_cuenta, titular, local_id, estado, con_deuda, observaciones)
+  (tipo, organismo, nro_cuenta, titular, local_id, estado, con_deuda, url_consulta, a_cargo, observaciones)
 select v.tipo, v.organismo, v.nro_cuenta, v.titular,
        (select id from public.locales where nombre = v.local limit 1),
-       v.estado, v.con_deuda, v.obs
+       v.estado, v.con_deuda, v.url, v.cargo, v.obs
 from (values
-  ('impuesto','DGR (Dirección General de Rentas)','042061303000000','Miguel Ángel Godoy', null,'activo',false,'Impuesto inmobiliario provincial'),
-  ('impuesto','Municipalidad de Rawson','IM206130300000','Miguel Ángel Godoy', null,'activo',false,'Tasa municipal'),
-  ('agua','OSSE (Obras Sanitarias Sociedad del Estado)','119-0066581-000/6','Miguel Ángel Godoy', null,'activo',false,'Medidor a nombre del propietario'),
-  ('energia','Naturgy','20004660492','Miguel Ángel Godoy','Local 1','activo',false,'Local 1 (esquina)'),
-  ('energia','Naturgy','20004660479','Miguel Ángel Godoy','Local 2','activo',false,'Local 2 (Paula A. de Sarmiento)'),
-  ('energia','Naturgy','20003841440','Mercedes Alicia Iramain','Local 3','activo',false,'Local 3 (San Lorenzo). Medidor a nombre de tercero'),
-  ('energia','Energía San Juan','20004513374','Abel Arroyo (ex inquilino)','Local 1','retirado',true,'Medidor retirado con deuda'),
-  ('energia','Energía San Juan','20003020493','Mercedes Alicia Iramain','Local 1','retirado',true,'Medidor retirado con deuda'),
-  ('energia','Energía San Juan','20000897544','Rafael Godoy','Local 2','retirado',true,'Medidor retirado con deuda')
-) as v(tipo, organismo, nro_cuenta, titular, local, estado, con_deuda, obs)
+  ('impuesto','DGR (Dirección General de Rentas)','042061303000000','Miguel Ángel Godoy', null,'activo',false,null,'propietario','Impuesto inmobiliario provincial · a cargo del LOCADOR (cláusula 5ª)'),
+  ('impuesto','Municipalidad de Rawson','IM206130300000','Miguel Ángel Godoy', null,'activo',false,'https://municipioderawson.gob.ar/geoportal/','inquilino','Tasa municipal · completar con el ID contribuyente'),
+  ('agua','OSSE (Obras Sanitarias Sociedad del Estado)','119-0066581-000/6','Miguel Ángel Godoy', null,'activo',false,'https://facturaweb.osse.com.ar/','inquilino','Medidor a nombre del propietario'),
+  ('energia','Naturgy','20004660492','Miguel Ángel Godoy','Local 1','activo',false,'https://oficinavirtual.naturgysj.com.ar/publico/pagos/consulta','inquilino','Local 1 (esquina)'),
+  ('energia','Naturgy','20004660479','Miguel Ángel Godoy','Local 2','activo',false,'https://oficinavirtual.naturgysj.com.ar/publico/pagos/consulta','inquilino','Local 2 (Paula A. de Sarmiento)'),
+  ('energia','Naturgy','20003841440','Mercedes Alicia Iramain','Local 3','activo',false,'https://oficinavirtual.naturgysj.com.ar/publico/pagos/consulta','inquilino','Local 3 (San Lorenzo). Medidor a nombre de tercero'),
+  ('energia','Energía San Juan','20004513374','Abel Arroyo (ex inquilino)','Local 1','retirado',true,null,'inquilino','Medidor retirado con deuda'),
+  ('energia','Energía San Juan','20003020493','Mercedes Alicia Iramain','Local 1','retirado',true,null,'inquilino','Medidor retirado con deuda'),
+  ('energia','Energía San Juan','20000897544','Rafael Godoy','Local 2','retirado',true,null,'inquilino','Medidor retirado con deuda')
+) as v(tipo, organismo, nro_cuenta, titular, local, estado, con_deuda, url, cargo, obs)
 where not exists (select 1 from public.cuentas_servicio);
 
 -- =====================================================================

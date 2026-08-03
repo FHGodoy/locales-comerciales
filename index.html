@@ -100,6 +100,12 @@
     padding:12px 16px;border-radius:10px;margin-bottom:20px;font-size:14px}
   .sumline{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)}
   .sumline:last-child{border-bottom:none}
+  #toast{position:fixed;right:20px;bottom:20px;z-index:100;max-width:330px;
+    background:var(--panel);border:1px solid var(--accent);border-radius:12px;
+    padding:16px 18px;box-shadow:0 10px 30px rgba(0,0,0,.5);
+    opacity:0;transform:translateY(14px);pointer-events:none;
+    transition:opacity .2s,transform .2s}
+  #toast.show{opacity:1;transform:translateY(0);pointer-events:auto}
 </style>
 </head>
 <body>
@@ -416,13 +422,30 @@ function alertas(){
     }
   }
 
-  // servicios a cargo del inquilino sin acreditar
+  // facturas de servicios pendientes de pago
   const gp=DATA.gastos.filter(g=>g.estado==='pendiente');
   for(const g of gp){
-    const d=g.fecha?diffDias(g.fecha,hoy):0;
-    out.push({n:d>30?3:2,t:'Servicio impago',
-      d:`${esc(g.categoria)}${g.local_id?' · '+localName(g.local_id):' · edificio'}: ${money(g.monto,g.moneda)} sin pagar${g.fecha?`, vencido hace ${d} día(s)`:''}.${d>30?' Supera los 30 días para acreditar el pago (cláusula 5ª).':''}`});
+    const dv=g.vencimiento?diffDias(hoy,g.vencimiento):null;   // + faltan, - vencida
+    const quien=`${esc(g.categoria)}${g.local_id?' · '+localName(g.local_id):' · edificio'}`;
+    if(dv!==null && dv<0){
+      out.push({n:3,t:'Factura vencida',
+        d:`${quien}: ${money(g.monto,g.moneda)} venció el ${fdate(g.vencimiento)}, hace ${-dv} día(s). A cargo de ${esc(g.a_cargo||'inquilino')}.${-dv>30?' Supera los 30 días para acreditar el pago (cláusula 5ª).':''}`,
+        b:`<button class="btn sec sm" onclick="openGasto(${g.id})">Ver</button>`});
+    } else if(dv!==null && dv<=7){
+      out.push({n:2,t:'Factura por vencer',
+        d:`${quien}: ${money(g.monto,g.moneda)} vence el ${fdate(g.vencimiento)} (en ${dv} día(s)).`,
+        b:`<button class="btn sec sm" onclick="openGasto(${g.id})">Ver</button>`});
+    } else if(dv===null){
+      out.push({n:2,t:'Factura impaga',
+        d:`${quien}: ${money(g.monto,g.moneda)} sin pagar, sin fecha de vencimiento cargada.`});
+    }
   }
+
+  // servicios del mes que todavía no se consultaron
+  const ymActual=hoy.slice(0,7);
+  const sinCons=(DATA.cuentas||[]).filter(c=>c.estado==='activo'&&c.url_consulta&&!facturaDe(c.id,ymActual));
+  if(sinCons.length) out.push({n:1,t:'Facturas sin consultar',
+    d:`Faltan consultar ${sinCons.length} servicio(s) del período ${ymActual}: ${sinCons.map(c=>c.organismo.split('(')[0].trim()+(c.local_id?' '+localName(c.local_id):'')).join(', ')}.`});
 
   // medidores con deuda
   const md=(DATA.cuentas||[]).filter(c=>c.con_deuda);
@@ -659,37 +682,162 @@ function viewPagos(){
 }
 
 /* ---- Gastos ---- */
+/*  Consulta asistida de facturas.
+    Los sitios de Naturgy, OSSE y Municipalidad cargan sus datos por
+    JavaScript y exigen completar un formulario, y además el navegador
+    impide (por CORS) que esta app lea datos de otro dominio. Por eso la
+    consulta no puede ser automática: el botón copia el número de cuenta
+    y abre el sitio, y al volver cargás la factura en un solo formulario. */
+/* Un link es "directo" si ya lleva la cuenta incrustada: abre el detalle de
+   deuda sin pasar por el formulario. Si no, se copia el número al
+   portapapeles para pegarlo en el sitio. */
+const esLinkDirecto=(c)=>{
+  if(!c.url_consulta) return false;
+  const u=c.url_consulta;
+  return /idCo=|detalle-deuda\/|[?&]cuenta=|suministro=/i.test(u);
+};
+// Nombre del campo a completar en cada sitio
+function campoDestino(c){
+  const u=c.url_consulta||'';
+  if(/naturgy/i.test(u))   return 'SUMINISTRO';
+  if(/osse/i.test(u))      return 'NÚMERO DE CUENTA';
+  if(/municipio/i.test(u)) return 'ID CONTRIBUYENTE';
+  if(/dgrsj|rentas/i.test(u)) return 'N° DE CUENTA (inmobiliario)';
+  return 'número de cuenta';
+}
+window.consultarServicio=(ctaId)=>{
+  const c=(DATA.cuentas||[]).find(x=>x.id==ctaId); if(!c) return;
+  if(!esLinkDirecto(c)){
+    copiar(c.nro_cuenta);   // el sitio pide completar el formulario
+    toast(`<div style="font-weight:700;margin-bottom:6px">Número copiado ✓</div>
+      <div style="font-family:ui-monospace,monospace;font-size:17px;letter-spacing:.5px">${esc(c.nro_cuenta)}</div>
+      <div style="font-size:12px;margin-top:6px;opacity:.85">
+        Pegalo con <strong>Ctrl+V</strong> en el campo <strong>${campoDestino(c)}</strong>
+        ${c.local_id?'<br>'+esc(localName(c.local_id)):''}
+      </div>
+      <button class="btn sec sm" style="margin-top:10px" onclick="cerrarToast()">Cerrar</button>`);
+  }
+  if(c.url_consulta) window.open(c.url_consulta,'_blank','noopener');
+  setTimeout(()=>openGastoDeCuenta(ctaId),400);
+};
+window.openGastoDeCuenta=(ctaId)=>{
+  const c=(DATA.cuentas||[]).find(x=>x.id==ctaId); if(!c) return;
+  openGasto(null,{
+    categoria: c.tipo==='energia'?'luz':(c.tipo==='agua'?'agua':'impuesto'),
+    local_id: c.local_id, cuenta_id:c.id, nro_cuenta:c.nro_cuenta,
+    descripcion: c.organismo + (c.local_id?(' · '+localName(c.local_id)):''),
+    a_cargo: c.a_cargo||'inquilino'
+  });
+};
+function facturaDe(ctaId, periodo){
+  return DATA.gastos.find(g=>g.cuenta_id==ctaId && g.periodo===periodo);
+}
+function panelFacturas(){
+  const ym=new Date().toISOString().slice(0,7);
+  const ctas=(DATA.cuentas||[]).filter(c=>c.estado==='activo' && c.url_consulta);
+  if(!ctas.length) return '';
+  const hoy=HOY();
+  const card=(c)=>{
+    const f=facturaDe(c.id,ym);
+    let est, acc;
+    if(f && f.estado==='pagado'){
+      est=`<span class="chip pagado">pagada</span>`;
+      acc=`<button class="btn sec sm" onclick="openGasto(${f.id})">Ver</button>`;
+    } else if(f){
+      const venc=f.vencimiento?diffDias(hoy,f.vencimiento):null;
+      est=`<span class="chip pendiente">a pagar ${money(f.monto,f.moneda)}</span>`+
+          (f.vencimiento?`<div class="muted" style="font-size:11px;margin-top:3px">vence ${fdate(f.vencimiento)}${venc!==null?(venc<0?` · vencida hace ${-venc} d`:` · en ${venc} d`):''}</div>`:'');
+      acc=`<button class="btn sec sm" onclick="openGasto(${f.id})">Editar</button>`;
+    } else {
+      const dir=esLinkDirecto(c);
+      est=`<span class="chip libre">sin consultar</span>`+
+          `<div class="muted" style="font-size:10px;margin-top:3px">${dir?'link directo':'hay que pegar el n°'}</div>`;
+      acc=`<button class="btn sm" onclick="consultarServicio(${c.id})">Consultar${dir?' →':''}</button>`;
+    }
+    return `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
+        <div>
+          <strong>${esc(c.organismo.split('(')[0].trim())}</strong>
+          <div class="muted" style="font-size:12px">${c.local_id?esc(localName(c.local_id)):'Todo el inmueble'}</div>
+          <div style="font-family:ui-monospace,monospace;font-size:12px;margin-top:4px">${esc(c.nro_cuenta)}</div>
+          <div style="font-size:11px;margin-top:4px;color:${c.a_cargo==='propietario'?'var(--warn)':'var(--muted)'}">
+            paga: ${c.a_cargo==='propietario'?'<strong>el propietario</strong>':'la inquilina'}</div>
+        </div>
+        <div style="text-align:right">${est}</div>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px">
+        ${acc}
+        <button class="btn sec sm" onclick="copiarCta('${esc(c.nro_cuenta)}')" title="Copiar número">⧉</button>
+        ${c.url_consulta?`<a class="btn sec sm" style="text-decoration:none;display:inline-block" href="${esc(c.url_consulta)}" target="_blank" rel="noopener">Abrir sitio ↗</a>`:''}
+      </div>
+    </div>`;
+  };
+  const sinConsultar=ctas.filter(c=>!facturaDe(c.id,ym)).length;
+  return `
+    <h3 style="margin:0 0 4px">Facturas del período ${ym}</h3>
+    <p class="sub">El botón <em>Consultar</em> copia el número de cuenta y abre el sitio del servicio.
+      Pegalo, mirá el importe y cargalo en el formulario que se abre solo.
+      ${sinConsultar?`<strong style="color:var(--warn)">Faltan consultar ${sinConsultar} de ${ctas.length}.</strong>`:'<strong style="color:var(--ok)">Todas consultadas.</strong>'}</p>
+    <div class="grid cards" style="margin-bottom:24px">${ctas.map(card).join('')}</div>`;
+}
+
 function viewGastos(){
-  const rows=DATA.gastos.map(g=>`
-    <tr>
-      <td>${fdate(g.fecha)}</td>
-      <td>${esc(g.categoria)}</td>
+  const hoy=HOY();
+  const rows=DATA.gastos.map(g=>{
+    const venc=(g.estado==='pendiente'&&g.vencimiento)?diffDias(hoy,g.vencimiento):null;
+    return `<tr>
+      <td>${fdate(g.fecha)}${g.periodo?`<div class="muted" style="font-size:11px">${esc(g.periodo)}</div>`:''}</td>
+      <td>${esc(g.categoria)}${g.nro_cuenta?`<div class="muted" style="font-size:11px;font-family:ui-monospace,monospace">${esc(g.nro_cuenta)}</div>`:''}</td>
       <td>${g.local_id?esc(localName(g.local_id)):'<span class="muted">General</span>'}</td>
       <td>${esc(g.descripcion||'')}</td>
+      <td>${g.vencimiento?fdate(g.vencimiento):'—'}
+        ${venc!==null?`<div style="font-size:11px;color:${venc<0?'var(--bad)':(venc<=5?'var(--warn)':'var(--muted)')}">${venc<0?`vencida hace ${-venc} d`:`en ${venc} d`}</div>`:''}</td>
       <td>${money(g.monto,g.moneda)}</td>
       <td><span class="chip ${g.estado}">${g.estado}</span></td>
       <td class="actbtns">
         <button class="btn sec sm" onclick="openGasto(${g.id})">Editar</button>
         <button class="btn danger sm" onclick="delRow('gastos',${g.id})">Borrar</button>
       </td>
-    </tr>`).join('');
+    </tr>`;}).join('');
+  const pend=DATA.gastos.filter(g=>g.estado==='pendiente');
+  const totPend=pend.filter(g=>g.moneda==='ARS').reduce((s,g)=>s+Number(g.monto||0),0);
   return `
     <div class="toolbar">
-      <div><h2 class="sec-title">Gastos y servicios</h2><p class="sub" style="margin:0">Luz, agua, impuestos, expensas, mantenimiento.</p></div>
+      <div><h2 class="sec-title">Gastos y servicios</h2><p class="sub" style="margin:0">Facturas pendientes, luz, agua, impuestos y mantenimiento.</p></div>
       <button class="btn" onclick="openGasto()">+ Nuevo gasto</button>
     </div>
+    ${pend.length?`<div class="setup">💰 ${pend.length} factura(s) pendiente(s) de pago por un total de ${money(totPend,'ARS')}.</div>`:''}
+    ${panelFacturas()}
+    <h3 style="margin:0 0 12px">Historial de gastos</h3>
     <div class="tbl-wrap">
-      <table><thead><tr><th>Fecha</th><th>Categoría</th><th>Local</th><th>Descripción</th><th>Monto</th><th>Estado</th><th></th></tr></thead>
-      <tbody>${rows||'<tr><td colspan="7" class="empty">Sin gastos</td></tr>'}</tbody></table>
+      <table><thead><tr><th>Fecha</th><th>Categoría</th><th>Local</th><th>Descripción</th><th>Vencimiento</th><th>Monto</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="8" class="empty">Sin gastos</td></tr>'}</tbody></table>
     </div>`;
 }
 
 /* ---- Cuentas y servicios ---- */
 const TIPOS_CTA={impuesto:{t:'Impuestos',ico:'🏛️'},agua:{t:'Agua y cloaca',ico:'💧'},energia:{t:'Energía',ico:'⚡'}};
 function copiar(txt){
-  navigator.clipboard && navigator.clipboard.writeText(txt);
+  if(navigator.clipboard) navigator.clipboard.writeText(txt).catch(()=>fallbackCopy(txt));
+  else fallbackCopy(txt);
 }
-window.copiarCta=(n)=>{ copiar(n); };
+function fallbackCopy(txt){
+  const t=document.createElement('textarea');
+  t.value=txt; t.style.position='fixed'; t.style.opacity='0';
+  document.body.appendChild(t); t.select();
+  try{ document.execCommand('copy'); }catch(e){}
+  document.body.removeChild(t);
+}
+/* Aviso flotante: confirma qué número se copió y dónde pegarlo. */
+function toast(html, ms){
+  let d=document.getElementById('toast');
+  if(!d){ d=document.createElement('div'); d.id='toast'; document.body.appendChild(d); }
+  d.innerHTML=html; d.className='show';
+  clearTimeout(toast._t);
+  toast._t=setTimeout(()=>{ d.className=''; }, ms||9000);
+}
+window.cerrarToast=()=>{ const d=document.getElementById('toast'); if(d) d.className=''; };
+window.copiarCta=(n)=>{ copiar(n); toast(`Copiado: <strong>${esc(n)}</strong>`,3000); };
 
 function ctaRow(c){
   return `<tr>
@@ -701,6 +849,7 @@ function ctaRow(c){
     <td>${c.estado==='retirado'?'<span class="chip libre">retirado</span>':'<span class="chip ocupado">activo</span>'}
         ${c.con_deuda?'<span class="chip pendiente">con deuda</span>':''}</td>
     <td class="actbtns">
+      ${c.url_consulta&&c.estado==='activo'?`<button class="btn sm" onclick="consultarServicio(${c.id})">Consultar</button>`:''}
       <button class="btn sec sm" onclick="openCuenta(${c.id})">Editar</button>
       <button class="btn danger sm" onclick="delRow('cuentas_servicio',${c.id})">Borrar</button>
     </td>
@@ -921,11 +1070,21 @@ window.openPago=(id)=>{
 };
 
 /* ---- Gasto ---- */
-window.openGasto=(id)=>{
-  const r=DATA.gastos.find(x=>x.id==id)||{};
+window.openGasto=(id, pre)=>{
+  const r=Object.assign({}, DATA.gastos.find(x=>x.id==id)||{}, pre||{});
   const locs=DATA.locales.map(l=>({v:l.id,t:l.nombre}));
   const cats=['luz','agua','gas','impuesto','expensa','mantenimiento','otro'].map(c=>({v:c,t:c[0].toUpperCase()+c.slice(1)}));
-  openModal(id?'Editar gasto':'Nuevo gasto',`
+  const ym=new Date().toISOString().slice(0,7);
+  const cta=(DATA.cuentas||[]).find(x=>x.id==r.cuenta_id);
+  openModal(id?'Editar gasto':'Cargar factura',`
+    ${cta?`<div class="card" style="margin-bottom:14px">
+      <div class="sumline"><span class="muted">Servicio</span><strong>${esc(cta.organismo)}</strong></div>
+      <div class="sumline"><span class="muted">N° de cuenta</span>
+        <span style="font-family:ui-monospace,monospace">${esc(cta.nro_cuenta)}
+        <button class="btn sec sm" style="padding:1px 6px" onclick="copiarCta('${esc(cta.nro_cuenta)}')">⧉</button></span></div>
+      ${cta.url_consulta?`<div class="sumline"><span class="muted">Consultar</span>
+        <a href="${esc(cta.url_consulta)}" target="_blank" rel="noopener">abrir sitio ↗</a></div>`:''}
+    </div>`:''}
     <div class="row">
       <div class="field"><label>Categoría</label><select id="f_cat">${selOptions(cats,r.categoria)}</select></div>
       <div class="field"><label>Local</label><select id="f_local">${selOptions(locs,r.local_id,'General (edificio)')}</select></div>
@@ -936,16 +1095,24 @@ window.openGasto=(id)=>{
       <div class="field"><label>Moneda</label><select id="f_moneda">${monedaSel(r.moneda)}</select></div>
     </div>
     <div class="row">
-      <div class="field"><label>Fecha</label><input id="f_fecha" type="date" value="${esc(r.fecha||'')}"></div>
-      <div class="field"><label>Estado</label><select id="f_estado">${selOptions([{v:'pagado',t:'Pagado'},{v:'pendiente',t:'Pendiente'}],r.estado||'pagado')}</select></div>
+      <div class="field"><label>Fecha de factura</label><input id="f_fecha" type="date" value="${esc(r.fecha||HOY())}"></div>
+      <div class="field"><label>Vence el</label><input id="f_venc" type="date" value="${esc(r.vencimiento||'')}"></div>
+      <div class="field"><label>Período</label><input id="f_per" type="month" value="${esc(r.periodo||ym)}"></div>
     </div>
-    <div class="field"><label>Pagado por</label><input id="f_por" placeholder="propietario / inquilino" value="${esc(r.pagado_por||'')}"></div>
+    <div class="row">
+      <div class="field"><label>Estado</label><select id="f_estado">${selOptions([{v:'pendiente',t:'Pendiente de pago'},{v:'pagado',t:'Pagado'}],r.estado||'pendiente')}</select></div>
+      <div class="field"><label>A cargo de</label><select id="f_cargo">${selOptions([{v:'inquilino',t:'Inquilino'},{v:'propietario',t:'Propietario'}],r.a_cargo||'inquilino')}</select></div>
+    </div>
+    <div class="field"><label>N° de cuenta</label><input id="f_nro" value="${esc(r.nro_cuenta||'')}"></div>
   `, async ()=>{
     const payload={
       categoria:val('f_cat'), local_id:numOrNull(val('f_local')),
       descripcion:val('f_desc'), monto:Number(val('f_monto')||0), moneda:val('f_moneda'),
-      fecha:val('f_fecha')||null, estado:val('f_estado'), pagado_por:val('f_por')
+      fecha:val('f_fecha')||null, vencimiento:val('f_venc')||null, periodo:val('f_per')||null,
+      estado:val('f_estado'), a_cargo:val('f_cargo'), pagado_por:val('f_cargo'),
+      nro_cuenta:val('f_nro')||null, cuenta_id:r.cuenta_id||null
     };
+    if(!payload.monto) throw new Error('Indicá el importe de la factura.');
     const q=id?sb.from('gastos').update(payload).eq('id',id):sb.from('gastos').insert(payload);
     const {error}=await q; if(error) throw error;
   });
@@ -968,14 +1135,20 @@ window.openCuenta=(id)=>{
       <div class="field"><label>Estado</label><select id="c_estado">${selOptions(
         [{v:'activo',t:'Activo'},{v:'retirado',t:'Retirado'}],r.estado||'activo')}</select></div>
     </div>
-    <div class="field"><label>¿Tiene deuda?</label><select id="c_deuda">${selOptions(
-      [{v:'no',t:'No'},{v:'si',t:'Sí, con deuda pendiente'}], r.con_deuda?'si':'no')}</select></div>
+    <div class="row">
+      <div class="field"><label>¿Tiene deuda?</label><select id="c_deuda">${selOptions(
+        [{v:'no',t:'No'},{v:'si',t:'Sí, con deuda pendiente'}], r.con_deuda?'si':'no')}</select></div>
+      <div class="field"><label>A cargo de</label><select id="c_cargo">${selOptions(
+        [{v:'inquilino',t:'Inquilino'},{v:'propietario',t:'Propietario'}], r.a_cargo||'inquilino')}</select></div>
+    </div>
+    <div class="field"><label>Página de consulta de factura</label><input id="c_url" value="${esc(r.url_consulta||'')}" placeholder="https://..."></div>
     <div class="field"><label>Observaciones</label><textarea id="c_obs" rows="2">${esc(r.observaciones||'')}</textarea></div>
   `, async ()=>{
     const payload={
       tipo:val('c_tipo'), organismo:val('c_org'), nro_cuenta:val('c_nro'),
       titular:val('c_tit'), local_id:numOrNull(val('c_local')),
       estado:val('c_estado'), con_deuda: val('c_deuda')==='si',
+      a_cargo:val('c_cargo'), url_consulta:val('c_url')||null,
       observaciones:val('c_obs')
     };
     if(!payload.organismo) throw new Error('Indicá el organismo o empresa.');
