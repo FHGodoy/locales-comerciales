@@ -1193,10 +1193,20 @@ let SERIES={ICL:null,IPC:null}; // cache de series descargadas
 let ULTIMO_ERROR_ICL='';
 async function fetchICL(desde){
   const hasta=new Date().toISOString().slice(0,10);
+  // idVariable 40 = "Índice para Contratos de Locación (base 30.6.20=1)"
+  // v4.0 devuelve results[0].detalle[]; v3.0 devuelve results[] directo.
+  const parseBCRA=j=>{
+    const res=j.results||[];
+    const det=(res[0]&&res[0].detalle)?res[0].detalle:res;
+    return det.map(x=>({fecha:x.fecha,valor:Number(x.valor)}));
+  };
   const fuentes=[
-    { n:'BCRA',
+    { n:'BCRA v4.0',
+      u:`https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/40?desde=${desde}&hasta=${hasta}&limit=3000`,
+      p:parseBCRA },
+    { n:'BCRA v3.0',
       u:`https://api.bcra.gob.ar/estadisticas/v3.0/monetarias/40?desde=${desde}&hasta=${hasta}&limit=3000`,
-      p:j=>(j.results||[]).map(x=>({fecha:x.fecha,valor:Number(x.valor)})) },
+      p:parseBCRA },
     { n:'ArgentinaDatos',
       u:'https://api.argentinadatos.com/v1/finanzas/indices/icl',
       p:j=>(j||[]).map(x=>({fecha:String(x.fecha).slice(0,10),valor:Number(x.valor)})) },

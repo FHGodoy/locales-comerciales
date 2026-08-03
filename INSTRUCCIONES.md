@@ -10,12 +10,20 @@ Archivos incluidos:
 - **`index.html`** — la aplicación (se sube a Vercel).
 - **`schema.sql`** — crea las tablas en Supabase (solo si empezás de cero).
 - **`actualizar-bd.sql`** — si **ya** tenías la base creada antes, corré este
-  archivo una vez para agregar los índices de ajuste y las cuentas de servicios.
+  archivo para agregar las tablas y columnas nuevas.
+- **`2-ajustes-illanes.sql`** — carga los 2 ajustes de canon ya vencidos del
+  contrato de Illanes, con los valores oficiales del ICL.
 - **`INSTRUCCIONES.md`** — este documento.
 
-> **Si tu base ya está creada:** te alcanza con correr `actualizar-bd.sql` en
-> Supabase (SQL Editor → New query → pegar → Run) y volver a subir el
-> `index.html` a Vercel. El resto de los pasos ya los hiciste.
+> **Si tu base ya está creada, hacé esto en orden:**
+> 1. Supabase → SQL Editor → New query → pegar **`actualizar-bd.sql`** → Run
+> 2. New query → pegar **`2-ajustes-illanes.sql`** → Run
+> 3. Volver a subir el `index.html` a Vercel y recargar con Ctrl+Shift+R
+>
+> **Error "Could not find the table 'public.ajustes_contrato' in the schema cache":**
+> significa que falta el paso 1, o que Supabase todavía no refrescó su caché.
+> El archivo ya incluye la orden `notify pgrst, 'reload schema'` que lo soluciona.
+> Si persiste, esperá un minuto o entrá a Settings → API → *Reload schema*.
 
 Si empezás de cero, son unos 15 minutos. Seguí los pasos en orden.
 
@@ -137,15 +145,20 @@ Datos tomados del contrato firmado el 16/10/2025:
 El alquiler se actualiza **en cascada**: cada ajuste se calcula sobre el monto que
 quedó en el ajuste anterior, no sobre el canon original.
 
-Para el contrato de Illanes (inicio 01/10/2025, cada 4 meses):
+Para el contrato de Illanes (inicio 01/10/2025, cada 4 meses), con los valores
+oficiales del ICL del BCRA consultados el 03/08/2026:
 
-```
-01/10/2025   $520.000                      canon inicial
-01/02/2026   $520.000 × factor ICL         1er ajuste
-01/06/2026   (monto anterior) × factor ICL 2do ajuste
-01/10/2026   (monto anterior) × factor ICL 3er ajuste
-01/02/2027 · 01/06/2027                    y así hasta el fin del contrato
-```
+| Fecha | ICL | Cálculo | Canon |
+|---|---|---|---|
+| 01/10/2025 | 27,75 | canon inicial | **$520.000** |
+| 01/02/2026 | 30,03 | 520.000 × (30,03 / 27,75) = +8,22% | **$562.724** |
+| 01/06/2026 | 33,27 | 562.724 × (33,27 / 30,03) = +10,79% | **$623.437** |
+| 01/10/2026 | — | sobre $623.437 | programado |
+| 01/02/2027 · 01/06/2027 | — | y así hasta el fin del contrato | programados |
+
+**Canon vigente hoy: $623.437** (+19,89% acumulado desde el inicio).
+
+El archivo `2-ajustes-illanes.sql` deja estos dos ajustes ya cargados.
 
 Cada ajuste queda **asentado en la base de datos**, así el valor no depende de que
 la app logre conectarse al BCRA. En **Contratos** → botón **Ajustes** ves la

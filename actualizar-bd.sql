@@ -145,6 +145,10 @@ drop policy if exists "acceso_autenticado" on public.ajustes_contrato;
 create policy "acceso_autenticado" on public.ajustes_contrato
   for all to authenticated using (true) with check (true);
 
+-- Refresca el caché de Supabase para que la app vea las tablas nuevas.
+-- (Sin esto puede aparecer: "Could not find the table in the schema cache")
+notify pgrst, 'reload schema';
+
 -- El Local 3 pasa a ocupado
 update public.locales set estado='ocupado'
 where nombre='Local 3'
