@@ -113,6 +113,58 @@ En **Contratos** → botón **Proyección** calculás los aumentos futuros segú
 Los tramos ya transcurridos usan datos oficiales; los futuros son estimaciones.
 Verificá siempre el índice del día del ajuste en la fuente oficial.
 
+## Contrato cargado: Jaquelina Elsa Illanes (Local 3)
+
+Datos tomados del contrato firmado el 16/10/2025:
+
+| Dato | Valor |
+|---|---|
+| Locataria | Jaquelina Elsa Illanes · DNI 25.550.495 · tel 2644163856 |
+| Local | Local 3 (San Lorenzo Oeste) · destino depósito |
+| Vigencia | 01/10/2025 al 30/09/2027 (2 años) · tenencia desde 17/10/2025 |
+| Canon inicial | $520.000 el primer cuatrimestre |
+| Actualización | **Cuatrimestral por ICL** (BCRA); supletoriamente IPC (cláusula 3ª) |
+| Vencimiento | Día 1 de cada mes, sin recargo hasta el día 10 |
+| Mora | Automática desde el día 1 (se pierden los días de gracia) |
+| Intereses | 0,3% diario punitorio + tasa activa BNA, capitalizables cada 6 meses (cláusula 8ª) |
+| Depósito | $520.000 |
+| Fiadores | Lucas Adrián Torregrosa (DNI 38.593.140) y Melina Soledad Illanes (DNI 30.152.408) |
+| Administra | Habitar Propiedades · Alto del Bono Shopping |
+| Servicios | Energía, gas, agua y tasa municipal a cargo de la locataria; **impuesto inmobiliario a cargo del locador**. Debe acreditar el pago dentro de los 30 días |
+
+### Alertas automáticas
+
+El Resumen muestra avisos ordenados por urgencia:
+
+- 🔵 Alquiler próximo a vencer (faltan 5 días o menos)
+- 🟠 En período de gracia (entre el día 1 y el 10, aún sin recargo)
+- 🔴 En mora (pasado el día 10), con la deuda estimada con intereses
+- 🔵 Ajuste de canon dentro de los próximos 30 días
+- 🟠 Vencimiento de contrato dentro de los próximos 90 días
+- 🔴 Servicios impagos, marcando los que superan los 30 días para acreditar
+- 🟠 Medidores retirados con deuda
+
+### Cálculo de intereses por mora
+
+En **Contratos** → botón **Mora**. Muestra por separado:
+
+- **Punitorio:** 0,3% diario simple sobre el capital (art. 769 CCyC)
+- **Moratorio:** tasa activa del Banco Nación, proporcional a los días (art. 768 CCyC)
+- Capitalización cada 6 meses (art. 770 CCyC)
+
+La tasa del BNA es un campo editable (valor inicial 75% anual): actualizala con la
+tasa vigente antes de usar el cálculo en un reclamo. El resultado es orientativo,
+consultá a tu abogado antes de una acción formal.
+
+## Prorrateo de servicios comunes
+
+En **Locales** cada unidad muestra su medidor de energía activo y **1/3** de las
+facturas de OSSE y Municipalidad, que se emiten por el inmueble completo.
+
+Para que aparezcan los importes, cargá cada factura en **Gastos** dejando el campo
+Local en *"General (edificio)"*. La app toma la última factura de cada servicio y la
+divide entre los 3 locales.
+
 ## Cuentas registradas
 
 **Impuestos** — DGR: 042061303000000 · Municipalidad de Rawson: IM206130300000

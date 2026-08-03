@@ -90,6 +90,16 @@
     padding:14px;border-radius:10px;margin:16px 0;font-size:14px}
   code{background:var(--chip);padding:2px 6px;border-radius:5px;font-size:13px}
   .actbtns{display:flex;gap:6px}
+  .alertbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px;margin-bottom:20px}
+  .alert-item{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    border-left:3px solid var(--accent);background:var(--panel2);border-radius:8px;
+    padding:10px 12px;margin-bottom:8px}
+  .alert-item:last-child{margin-bottom:0}
+  .ok-box{background:rgba(34,197,94,.1);border:1px solid var(--ok);color:#86efac;
+    padding:12px 16px;border-radius:10px;margin-bottom:20px;font-size:14px}
+  .sumline{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)}
+  .sumline:last-child{border-bottom:none}
 </style>
 </head>
 <body>
@@ -209,6 +219,19 @@ async function enterApp(){
   $('#app').style.display='block';
   await loadAll();
   render('dashboard');
+  // Descarga los índices en segundo plano para actualizar el canon vigente
+  precargarIndices();
+}
+async function precargarIndices(){
+  const act=DATA.contratos.filter(c=>c.estado==='activo'&&c.fecha_inicio);
+  if(!act.length) return;
+  const desde=act.map(c=>c.fecha_inicio).sort()[0];
+  const usaICL=act.some(c=>(c.ajuste_indice||'ICL')==='ICL');
+  const usaIPC=act.some(c=>c.ajuste_indice==='IPC');
+  try{ if(usaICL && !SERIES.ICL) SERIES.ICL=await fetchICL(addMonthsISO(desde,-2)); }catch(e){}
+  try{ if(usaIPC && !SERIES.IPC) SERIES.IPC=await fetchIPC(); }catch(e){}
+  const tab=document.querySelector('#tabs button.active');
+  if(tab) render(tab.dataset.tab);
 }
 document.querySelectorAll('#tabs button').forEach(b=>{
   b.onclick=()=>{
@@ -233,6 +256,77 @@ async function loadAll(){
     pagos:pa.data||[], gastos:ga.data||[], cuentas:cu.data||[]
   };
 }
+/* ===================== MOTOR DE CÁLCULO (canon, alertas, mora) ===================== */
+const HOY = ()=> new Date().toISOString().slice(0,10);
+const diffDias=(a,b)=>Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000);
+
+// Canon vigente hoy: aplica los ajustes ya cumplidos desde el inicio del contrato.
+// Con ICL usa la serie oficial del BCRA si está descargada; si no, informa que falta.
+function canonVigente(c){
+  const base=Number(c.monto_alquiler)||0;
+  const res={monto:base, ajustes:0, proximo:null, fuente:'contrato', pendiente:false};
+  if(!c.fecha_inicio) return res;
+  const frec=Math.max(1,parseInt(c.ajuste_periodo)||4);
+  const hoy=HOY();
+  // fechas de ajuste ya cumplidas
+  let f=addMonthsISO(c.fecha_inicio,frec), prev=c.fecha_inicio, monto=base, n=0;
+  const idx=c.ajuste_indice||'ICL';
+  while(f<=hoy){
+    let factor=null;
+    if(idx==='FIJO' && c.ajuste_porcentaje) factor=1+Number(c.ajuste_porcentaje)/100;
+    else if(idx==='ICL' && SERIES.ICL){
+      const a=iclAt(SERIES.ICL,prev), b=iclAt(SERIES.ICL,f);
+      if(a&&b) factor=b/a;
+    } else if(idx==='IPC' && SERIES.IPC){
+      factor=1;
+      for(const m of monthsBetween(prev,f)){
+        const d=SERIES.IPC.find(x=>x.mes===m);
+        if(d) factor*=1+d.valor/100; else { res.pendiente=true; }
+      }
+    }
+    if(factor===null){ res.pendiente=true; }
+    else { monto*=factor; n++; res.fuente=(idx==='FIJO'?'% fijo del contrato':idx+' oficial'); }
+    prev=f; f=addMonthsISO(f,frec);
+  }
+  res.monto=monto; res.ajustes=n; res.proximo=f;
+  return res;
+}
+
+// Estado de pago del mes en curso
+function estadoAlquiler(c){
+  const hoy=HOY(), dia=new Date().getUTCDate();
+  const per=hoy.slice(0,7);
+  const pago=(DATA.pagos||[]).find(p=>p.contrato_id==c.id && p.periodo===per && p.estado==='pagado');
+  const gracia=parseInt(c.dia_gracia)||10;
+  const venc=parseInt(c.dia_vencimiento)||1;
+  if(pago) return {estado:'pagado', dias:0, msg:'Alquiler de '+per+' cobrado.'};
+  if(dia<venc)   return {estado:'porvencer', dias:venc-dia, msg:`Vence en ${venc-dia} día(s).`};
+  if(dia<=gracia)return {estado:'gracia', dias:gracia-dia,
+    msg:`En período de gracia: puede pagar sin recargo hasta el día ${gracia} (quedan ${gracia-dia+1} día(s)).`};
+  return {estado:'mora', dias:dia-venc,
+    msg:`En mora desde el día ${venc}. Lleva ${dia-venc} día(s) de atraso.`};
+}
+
+/* Intereses por mora — cláusula 8ª:
+   · Punitorio: % diario simple sobre el capital (0,3% diario por defecto).
+   · Moratorio: tasa activa del Banco Nación (anual), proporcional a los días.
+   · Capitalización cada 6 meses (art. 770 CCyC).
+   Se muestran por separado y sumados. */
+function calcMora(capital, dias, punitDiario, tasaAnual, capMeses){
+  capital=Number(capital)||0; dias=Math.max(0,dias|0);
+  const pd=Number(punitDiario)||0, ta=Number(tasaAnual)||0;
+  const capDias=Math.max(1,Math.round((Number(capMeses)||6)*30.4167));
+  let cap=capital, punit=0, morat=0, restante=dias;
+  while(restante>0){
+    const tramo=Math.min(restante,capDias);
+    const p=cap*(pd/100)*tramo;
+    const m=cap*(ta/100)*(tramo/365);
+    punit+=p; morat+=m; cap+=p+m;      // capitalización al cierre del tramo
+    restante-=tramo;
+  }
+  return {punitorio:punit, moratorio:morat, total:punit+morat, deuda:capital+punit+morat, dias};
+}
+
 const localName = id => (DATA.locales.find(l=>l.id==id)||{}).nombre || '—';
 const inqName   = id => (DATA.inquilinos.find(i=>i.id==id)||{}).nombre || '—';
 function contratoLabel(c){
@@ -251,6 +345,66 @@ function render(tab){
   if(tab==='cuentas')    return v.innerHTML = viewCuentas();
 }
 
+/* ---- Panel de alertas ---- */
+function alertas(){
+  const out=[], hoy=HOY();
+  const activos=DATA.contratos.filter(c=>c.estado==='activo');
+
+  for(const c of activos){
+    const et=estadoAlquiler(c), v=canonVigente(c);
+    const quien=`${localName(c.local_id)} · ${inqName(c.inquilino_id)}`;
+    if(et.estado==='mora'){
+      const m=calcMora(v.monto, et.dias, c.punitorio_diario, c.tasa_bna_anual, c.capitaliza_meses);
+      out.push({n:3,t:'Alquiler en mora',d:`${quien}: ${et.msg} Deuda estimada ${money(m.deuda,c.moneda)} (capital ${money(v.monto,c.moneda)} + intereses ${money(m.total,c.moneda)}).`,
+        b:`<button class="btn sec sm" onclick="openMora(${c.id})">Ver cálculo</button>`});
+    } else if(et.estado==='gracia'){
+      out.push({n:2,t:'Alquiler pendiente',d:`${quien}: ${et.msg} Monto ${money(v.monto,c.moneda)}.`});
+    } else if(et.estado==='porvencer' && et.dias<=5){
+      out.push({n:1,t:'Alquiler próximo a vencer',d:`${quien}: ${et.msg} Monto ${money(v.monto,c.moneda)}.`});
+    }
+    // próximo ajuste del canon
+    if(v.proximo){
+      const d=diffDias(hoy,v.proximo);
+      if(d>=0 && d<=30) out.push({n:1,t:'Ajuste de alquiler próximo',
+        d:`${quien}: corresponde actualizar por ${idxLabel(c.ajuste_indice)} el ${fdate(v.proximo)} (en ${d} día(s)).`});
+    }
+    // vencimiento del contrato
+    if(c.fecha_fin){
+      const d=diffDias(hoy,c.fecha_fin);
+      if(d>=0 && d<=90) out.push({n:2,t:'Vencimiento de contrato',
+        d:`${quien}: el contrato vence el ${fdate(c.fecha_fin)} (en ${d} día(s)). Inspección prevista entre 45 y 15 días antes.`});
+    }
+  }
+
+  // servicios a cargo del inquilino sin acreditar
+  const gp=DATA.gastos.filter(g=>g.estado==='pendiente');
+  for(const g of gp){
+    const d=g.fecha?diffDias(g.fecha,hoy):0;
+    out.push({n:d>30?3:2,t:'Servicio impago',
+      d:`${esc(g.categoria)}${g.local_id?' · '+localName(g.local_id):' · edificio'}: ${money(g.monto,g.moneda)} sin pagar${g.fecha?`, vencido hace ${d} día(s)`:''}.${d>30?' Supera los 30 días para acreditar el pago (cláusula 5ª).':''}`});
+  }
+
+  // medidores con deuda
+  const md=(DATA.cuentas||[]).filter(c=>c.con_deuda);
+  if(md.length) out.push({n:2,t:'Medidores con deuda',
+    d:`${md.length} suministro(s) retirado(s) con deuda pendiente de resolución. Ver pestaña Servicios.`});
+
+  return out.sort((a,b)=>b.n-a.n);
+}
+function panelAlertas(){
+  const A=alertas();
+  if(!A.length) return `<div class="ok-box">✅ Sin alertas. Los alquileres y servicios están al día.</div>`;
+  const col=n=>n>=3?'var(--bad)':(n===2?'var(--warn)':'var(--accent)');
+  const ico=n=>n>=3?'🔴':(n===2?'🟠':'🔵');
+  return `<div class="alertbox">
+    <div style="font-weight:700;margin-bottom:10px">Alertas (${A.length})</div>
+    ${A.map(a=>`<div class="alert-item" style="border-left-color:${col(a.n)}">
+      <div><strong>${ico(a.n)} ${esc(a.t)}</strong><div class="muted" style="font-size:13px;margin-top:2px">${a.d}</div></div>
+      ${a.b||''}
+    </div>`).join('')}
+  </div>`;
+}
+
 /* ---- Dashboard ---- */
 function viewDashboard(){
   const L=DATA.locales;
@@ -258,10 +412,12 @@ function viewDashboard(){
   const libre=L.filter(l=>l.estado==='libre').length;
   const refa=L.filter(l=>l.estado==='refaccion').length;
 
-  // ingreso mensual esperado por contratos activos
+  // ingreso mensual esperado, con el canon YA ACTUALIZADO a hoy
   const activos=DATA.contratos.filter(c=>c.estado==='activo');
-  const ingARS=activos.filter(c=>c.moneda==='ARS').reduce((s,c)=>s+Number(c.monto_alquiler||0),0);
-  const ingUSD=activos.filter(c=>c.moneda==='USD').reduce((s,c)=>s+Number(c.monto_alquiler||0),0);
+  const vig=new Map(activos.map(c=>[c.id,canonVigente(c)]));
+  const ingARS=activos.filter(c=>c.moneda==='ARS').reduce((s,c)=>s+vig.get(c.id).monto,0);
+  const ingUSD=activos.filter(c=>c.moneda==='USD').reduce((s,c)=>s+vig.get(c.id).monto,0);
+  const baseARS=activos.filter(c=>c.moneda==='ARS').reduce((s,c)=>s+Number(c.monto_alquiler||0),0);
 
   // pagos pendientes
   const pend=DATA.pagos.filter(p=>p.estado!=='pagado');
@@ -274,13 +430,16 @@ function viewDashboard(){
 
   const locCards = L.map(l=>{
     const c=activos.find(x=>x.local_id==l.id);
+    const v=c?vig.get(c.id):null;
     return `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <strong>${esc(l.nombre)}</strong>
         <span class="chip ${l.estado}">${l.estado}</span>
       </div>
       <div class="muted" style="font-size:13px;margin-top:8px">
-        ${c ? `${esc(inqName(c.inquilino_id))}<br>${money(c.monto_alquiler,c.moneda)} / mes`
+        ${c ? `${esc(inqName(c.inquilino_id))}<br>
+               <span style="color:var(--txt);font-size:15px;font-weight:600">${money(v.monto,c.moneda)}</span> / mes
+               ${v.ajustes?`<br><span style="font-size:11px">actualizado · ${v.ajustes} ajuste(s) aplicados</span>`:''}`
             : 'Sin contrato activo'}
       </div>
     </div>`;
@@ -288,43 +447,87 @@ function viewDashboard(){
 
   return `
     <h2 class="sec-title">Resumen</h2>
-    <p class="sub">Estado general de los 3 locales del edificio.</p>
+    <p class="sub">Estado general de los 3 locales del edificio · ${new Date().toLocaleDateString('es-AR')}</p>
+    ${panelAlertas()}
     <div class="grid kpi" style="margin-bottom:22px">
       <div class="card"><div class="lbl">Ocupados</div><div class="big" style="color:var(--ok)">${ocup}</div></div>
       <div class="card"><div class="lbl">Libres</div><div class="big">${libre}</div></div>
       <div class="card"><div class="lbl">En refacción</div><div class="big" style="color:var(--warn)">${refa}</div></div>
-      <div class="card"><div class="lbl">Ingreso mensual</div><div class="big">${money(ingARS,'ARS')}</div>
+      <div class="card"><div class="lbl">Alquiler actualizado hoy</div><div class="big">${money(ingARS,'ARS')}</div>
+        ${baseARS&&Math.round(ingARS)!==Math.round(baseARS)?`<div class="muted" style="font-size:11px">base contrato ${money(baseARS,'ARS')} · +${(((ingARS/baseARS)-1)*100).toFixed(1)}%</div>`:''}
         ${ingUSD?`<div class="muted">+ ${money(ingUSD,'USD')}</div>`:''}</div>
       <div class="card"><div class="lbl">Pagos pendientes</div><div class="big" style="color:${pend.length?'var(--bad)':'var(--ok)'}">${pend.length}</div></div>
       <div class="card"><div class="lbl">Gastos del mes</div><div class="big">${money(gARS,'ARS')}</div>
         ${gUSD?`<div class="muted">+ ${money(gUSD,'USD')}</div>`:''}</div>
     </div>
-    ${(DATA.cuentas||[]).filter(c=>c.con_deuda).length?`<div class="setup">⚠️ Hay ${(DATA.cuentas||[]).filter(c=>c.con_deuda).length} medidores retirados con deuda pendiente. Ver pestaña <strong>Servicios</strong>.</div>`:''}
     <h3 style="margin:0 0 12px">Locales</h3>
     <div class="grid cards">${locCards||'<p class="empty">No hay locales.</p>'}</div>
   `;
 }
 
 /* ---- Locales ---- */
+/* Último gasto registrado de un servicio general del edificio (OSSE / Municipalidad).
+   Se prorratea en partes iguales entre los 3 locales. */
+function ultimoGastoGeneral(regex){
+  const g=DATA.gastos
+    .filter(x=>!x.local_id && (regex.test(x.categoria||'') || regex.test(x.descripcion||'')))
+    .sort((a,b)=>String(b.fecha||'').localeCompare(String(a.fecha||'')));
+  return g[0]||null;
+}
 function viewLocales(){
-  const rows=DATA.locales.map(l=>`
-    <tr>
-      <td><strong>${esc(l.nombre)}</strong></td>
-      <td>${l.superficie_m2?esc(l.superficie_m2)+' m²':'—'}</td>
-      <td><span class="chip ${l.estado}">${l.estado}</span></td>
-      <td class="muted">${esc(l.descripcion||'')}</td>
+  const nLoc=Math.max(1,DATA.locales.length);
+  const gOsse=ultimoGastoGeneral(/agua|osse/i);
+  const gMuni=ultimoGastoGeneral(/municip|tasa/i);
+  const terceroOsse=(gOsse?Number(gOsse.monto):0)/nLoc;
+  const terceroMuni=(gMuni?Number(gMuni.monto):0)/nLoc;
+  const ctaOsse=(DATA.cuentas||[]).find(c=>c.tipo==='agua');
+  const ctaMuni=(DATA.cuentas||[]).find(c=>c.tipo==='impuesto'&&/municip/i.test(c.organismo));
+
+  const rows=DATA.locales.map(l=>{
+    const ener=(DATA.cuentas||[]).find(c=>c.tipo==='energia'&&c.local_id==l.id&&c.estado==='activo');
+    const enerDeuda=(DATA.cuentas||[]).filter(c=>c.tipo==='energia'&&c.local_id==l.id&&c.con_deuda);
+    const con=DATA.contratos.find(c=>c.local_id==l.id&&c.estado==='activo');
+    return `<tr>
+      <td><strong>${esc(l.nombre)}</strong>
+        <div class="muted" style="font-size:11px">${esc(l.descripcion||'')}</div>
+        ${con?`<div class="muted" style="font-size:11px">${esc(inqName(con.inquilino_id))}</div>`:''}</td>
+      <td><span class="chip ${l.estado}">${l.estado}</span>
+        ${enerDeuda.length?`<div><span class="chip pendiente" style="margin-top:4px">${enerDeuda.length} medidor(es) c/deuda</span></div>`:''}</td>
+      <td>${ener?`${esc(ener.organismo)}<div style="font-family:ui-monospace,monospace;font-size:13px">${esc(ener.nro_cuenta)}</div>
+            <div class="muted" style="font-size:11px">Titular: ${esc(ener.titular||'—')}</div>`
+          :'<span class="muted">Sin suministro asignado</span>'}</td>
+      <td>${gOsse?`<strong>${money(terceroOsse,gOsse.moneda)}</strong><div class="muted" style="font-size:11px">1/${nLoc} de ${money(gOsse.monto,gOsse.moneda)} · ${fdate(gOsse.fecha)}</div>`
+          :'<span class="muted">Sin factura cargada</span>'}</td>
+      <td>${gMuni?`<strong>${money(terceroMuni,gMuni.moneda)}</strong><div class="muted" style="font-size:11px">1/${nLoc} de ${money(gMuni.monto,gMuni.moneda)} · ${fdate(gMuni.fecha)}</div>`
+          :'<span class="muted">Sin factura cargada</span>'}</td>
       <td class="actbtns">
         <button class="btn sec sm" onclick="openLocal(${l.id})">Editar</button>
       </td>
-    </tr>`).join('');
+    </tr>`;}).join('');
+
   return `
     <div class="toolbar">
-      <div><h2 class="sec-title">Locales</h2><p class="sub" style="margin:0">Estado de ocupación de cada unidad.</p></div>
+      <div><h2 class="sec-title">Locales</h2><p class="sub" style="margin:0">Ocupación, suministro de energía asignado y prorrateo de servicios comunes.</p></div>
       <button class="btn" onclick="openLocal()">+ Nuevo local</button>
     </div>
     <div class="tbl-wrap">
-      <table><thead><tr><th>Nombre</th><th>Superficie</th><th>Estado</th><th>Descripción</th><th></th></tr></thead>
-      <tbody>${rows||'<tr><td colspan="5" class="empty">Sin locales</td></tr>'}</tbody></table>
+      <table><thead><tr>
+        <th>Local</th><th>Estado</th><th>Energía (medidor activo)</th>
+        <th>Agua OSSE (1/${nLoc})</th><th>Municipalidad (1/${nLoc})</th><th></th>
+      </tr></thead>
+      <tbody>${rows||'<tr><td colspan="6" class="empty">Sin locales</td></tr>'}</tbody></table>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <strong style="font-size:14px">Cómo se calcula el prorrateo</strong>
+      <p class="muted" style="font-size:13px;margin:8px 0 0">
+        OSSE (cuenta ${esc(ctaOsse?ctaOsse.nro_cuenta:'—')}) y Municipalidad de Rawson
+        (cuenta ${esc(ctaMuni?ctaMuni.nro_cuenta:'—')}) facturan el inmueble completo,
+        así que a cada local le corresponde <strong>1/${nLoc}</strong> del importe.
+        La app toma la última factura cargada en <em>Gastos</em> como gasto general
+        (sin local asignado) y la divide entre ${nLoc}. Cargá cada factura nueva en
+        Gastos para que estos valores se actualicen.
+        ${(!gOsse||!gMuni)?'<br><br>⚠️ Faltan cargar facturas: '+[!gOsse?'OSSE':null,!gMuni?'Municipalidad':null].filter(Boolean).join(' y ')+'.':''}
+      </p>
     </div>`;
 }
 
@@ -354,27 +557,34 @@ function viewInquilinos(){
 
 /* ---- Contratos ---- */
 function viewContratos(){
-  const rows=DATA.contratos.map(c=>`
-    <tr>
+  const chipPago={pagado:'pagado',gracia:'parcial',porvencer:'activo',mora:'pendiente'};
+  const rows=DATA.contratos.map(c=>{
+    const v=canonVigente(c);
+    const et=c.estado==='activo'?estadoAlquiler(c):null;
+    return `<tr>
       <td><strong>${esc(localName(c.local_id))}</strong></td>
       <td>${esc(inqName(c.inquilino_id))}</td>
-      <td>${money(c.monto_alquiler,c.moneda)}</td>
+      <td><strong>${money(v.monto,c.moneda)}</strong>
+        ${v.ajustes?`<div class="muted" style="font-size:11px">base ${money(c.monto_alquiler,c.moneda)} · ${v.ajustes} ajuste(s)</div>`:''}</td>
       <td>${fdate(c.fecha_inicio)} → ${fdate(c.fecha_fin)}</td>
-      <td>${idxLabel(c.ajuste_indice)}${c.ajuste_periodo?` <span class="muted">c/${esc(c.ajuste_periodo)}m</span>`:''}</td>
-      <td><span class="chip ${c.estado}">${c.estado}</span></td>
+      <td>${idxLabel(c.ajuste_indice)}${c.ajuste_periodo?` <span class="muted">c/${esc(c.ajuste_periodo)}m</span>`:''}
+        ${v.proximo?`<div class="muted" style="font-size:11px">próx: ${fdate(v.proximo)}</div>`:''}</td>
+      <td>${et?`<span class="chip ${chipPago[et.estado]}">${et.estado==='porvencer'?'al día':et.estado}</span>`
+             :`<span class="chip ${c.estado}">${c.estado}</span>`}</td>
       <td class="actbtns">
+        <button class="btn sec sm" onclick="openMora(${c.id})">Mora</button>
         <button class="btn sec sm" onclick="openProyeccion(${c.id})">Proyección</button>
         <button class="btn sec sm" onclick="openContrato(${c.id})">Editar</button>
         <button class="btn danger sm" onclick="delRow('contratos',${c.id})">Borrar</button>
       </td>
-    </tr>`).join('');
+    </tr>`;}).join('');
   return `
     <div class="toolbar">
-      <div><h2 class="sec-title">Contratos</h2><p class="sub" style="margin:0">Alquileres, plazos, índices de ajuste y proyección de incrementos.</p></div>
+      <div><h2 class="sec-title">Contratos</h2><p class="sub" style="margin:0">Alquiler actualizado a hoy, plazos, índices y cálculo de mora.</p></div>
       <button class="btn" onclick="openContrato()">+ Nuevo contrato</button>
     </div>
     <div class="tbl-wrap">
-      <table><thead><tr><th>Local</th><th>Inquilino</th><th>Alquiler</th><th>Vigencia</th><th>Ajuste</th><th>Estado</th><th></th></tr></thead>
+      <table><thead><tr><th>Local</th><th>Inquilino</th><th>Alquiler hoy</th><th>Vigencia</th><th>Ajuste</th><th>Pago del mes</th><th></th></tr></thead>
       <tbody>${rows||'<tr><td colspan="7" class="empty">Sin contratos</td></tr>'}</tbody></table>
     </div>`;
 }
@@ -585,9 +795,17 @@ window.openContrato=(id)=>{
       <div class="field"><label>Fin</label><input id="f_fin" type="date" value="${esc(r.fecha_fin||'')}"></div>
     </div>
     <div class="row">
-      <div class="field"><label>Día de vencimiento</label><input id="f_dia" type="number" min="1" max="31" value="${esc(r.dia_vencimiento||10)}"></div>
+      <div class="field"><label>Vence el día</label><input id="f_dia" type="number" min="1" max="31" value="${esc(r.dia_vencimiento||1)}"></div>
+      <div class="field"><label>Sin recargo hasta el día</label><input id="f_gracia" type="number" min="1" max="31" value="${esc(r.dia_gracia||10)}"></div>
       <div class="field"><label>Depósito/garantía</label><input id="f_dep" type="number" step="0.01" value="${esc(r.deposito_garantia||'')}"></div>
     </div>
+    <div class="row">
+      <div class="field"><label>Punitorio diario (%)</label><input id="f_pun" type="number" step="0.01" value="${esc(r.punitorio_diario??0.3)}"></div>
+      <div class="field"><label>Tasa activa BNA anual (%)</label><input id="f_bna" type="number" step="0.01" value="${esc(r.tasa_bna_anual??75)}"></div>
+      <div class="field"><label>Capitaliza cada (meses)</label><input id="f_capm" type="number" min="1" value="${esc(r.capitaliza_meses||6)}"></div>
+    </div>
+    <div class="field"><label>Fiadores</label><textarea id="f_fia" rows="2">${esc(r.fiadores||'')}</textarea></div>
+    <div class="field"><label>Administradora</label><input id="f_adm" value="${esc(r.administradora||'')}"></div>
     <div class="row">
       <div class="field"><label>Índice de ajuste</label><select id="f_indice">${selOptions([
         {v:'ICL',t:'ICL (Contratos de Locación · BCRA)'},
@@ -606,7 +824,11 @@ window.openContrato=(id)=>{
       local_id:numOrNull(val('f_local')), inquilino_id:numOrNull(val('f_inq')),
       monto_alquiler:Number(val('f_monto')||0), moneda:val('f_moneda'),
       fecha_inicio:val('f_ini')||null, fecha_fin:val('f_fin')||null,
-      dia_vencimiento:numOrNull(val('f_dia')), deposito_garantia:numOrNull(val('f_dep')),
+      dia_vencimiento:numOrNull(val('f_dia')), dia_gracia:numOrNull(val('f_gracia')),
+      deposito_garantia:numOrNull(val('f_dep')),
+      punitorio_diario:numOrNull(val('f_pun')), tasa_bna_anual:numOrNull(val('f_bna')),
+      capitaliza_meses:numOrNull(val('f_capm')),
+      fiadores:val('f_fia'), administradora:val('f_adm'),
       ajuste_indice:val('f_indice'),
       ajuste_periodo:val('f_ajp'), ajuste_porcentaje:numOrNull(val('f_ajpc')),
       estado:val('f_estado'), notas:val('f_notas')
@@ -720,6 +942,63 @@ window.openCuenta=(id)=>{
               :sb.from('cuentas_servicio').insert(payload);
     const {error}=await q; if(error) throw error;
   });
+};
+
+/* ============================ INTERESES POR MORA ============================ */
+/*  Cláusula 8ª del contrato: la mora es automática desde el día 1 de cada mes
+    (se pierden los días de gracia de la cláusula 3ª). Se devengan:
+      · interés punitorio del 0,3% diario (art. 769 CCyC)
+      · interés moratorio: tasa activa del Banco Nación (art. 768 CCyC)
+    ambos capitalizables cada 6 meses (art. 770 CCyC).                       */
+window.openMora=(id)=>{
+  const c=DATA.contratos.find(x=>x.id==id); if(!c) return;
+  const v=canonVigente(c);
+  const hoy=HOY();
+  const venc=String(parseInt(c.dia_vencimiento)||1).padStart(2,'0');
+  const desde=hoy.slice(0,7)+'-'+venc;
+  openModal('Intereses por mora · '+contratoLabel(c),`
+    <div class="row">
+      <div class="field"><label>Capital adeudado</label><input id="m_cap" type="number" step="0.01" value="${Math.round(v.monto)}"></div>
+      <div class="field"><label>Moneda</label><input value="${esc(c.moneda)}" disabled></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Exigible desde</label><input id="m_desde" type="date" value="${desde}"></div>
+      <div class="field"><label>Calculado hasta</label><input id="m_hasta" type="date" value="${hoy}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Punitorio diario (%)</label><input id="m_pun" type="number" step="0.01" value="${esc(c.punitorio_diario??0.3)}"></div>
+      <div class="field"><label>Tasa activa BNA anual (%)</label><input id="m_bna" type="number" step="0.01" value="${esc(c.tasa_bna_anual??75)}"></div>
+    </div>
+    <p class="muted" style="font-size:11px;margin:0 0 12px">
+      Cláusula 8ª: mora automática desde el día ${parseInt(c.dia_vencimiento)||1} (se pierden los días de gracia).
+      Punitorio art. 769 CCyC + tasa activa BNA art. 768 CCyC, capitalizables cada ${c.capitaliza_meses||6} meses (art. 770).
+      Actualizá la tasa del BNA con el valor vigente antes de reclamar.
+    </p>
+    <div id="m_out"></div>
+  `, null, {hideSave:true});
+
+  const calc=()=>{
+    const cap=Number(val('m_cap'))||0;
+    const d1=val('m_desde'), d2=val('m_hasta');
+    const dias=Math.max(0,diffDias(d1,d2));
+    const r=calcMora(cap,dias,val('m_pun'),val('m_bna'),c.capitaliza_meses||6);
+    document.getElementById('m_out').innerHTML=`
+      <div class="card">
+        <div class="sumline"><span class="muted">Días de mora</span><strong>${dias}</strong></div>
+        <div class="sumline"><span class="muted">Capital</span><strong>${money(cap,c.moneda)}</strong></div>
+        <div class="sumline"><span class="muted">Interés punitorio (${val('m_pun')}% diario)</span><strong style="color:var(--warn)">${money(r.punitorio,c.moneda)}</strong></div>
+        <div class="sumline"><span class="muted">Interés moratorio (tasa activa BNA ${val('m_bna')}% anual)</span><strong style="color:var(--warn)">${money(r.moratorio,c.moneda)}</strong></div>
+        <div class="sumline"><span class="muted">Total intereses</span><strong>${money(r.total,c.moneda)}</strong></div>
+        <div class="sumline" style="border-top:2px solid var(--line);padding-top:10px">
+          <span style="font-weight:600">TOTAL A COBRAR</span>
+          <strong style="font-size:19px;color:var(--bad)">${money(r.deuda,c.moneda)}</strong></div>
+      </div>
+      <p class="muted" style="font-size:11px;margin-top:8px">Cálculo orientativo. Verificá la tasa activa vigente del Banco Nación y consultá a tu abogado antes de un reclamo formal.</p>`;
+  };
+  ['m_cap','m_desde','m_hasta','m_pun','m_bna'].forEach(i=>{
+    const el=document.getElementById(i); if(el) el.oninput=calc;
+  });
+  calc();
 };
 
 /* ============================ PROYECCIÓN DE INCREMENTOS ============================ */

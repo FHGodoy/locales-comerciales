@@ -41,7 +41,18 @@ create table if not exists public.contratos (
   fecha_fin         date,
   monto_alquiler    numeric not null default 0,
   moneda            text not null default 'ARS' check (moneda in ('ARS','USD')),
-  dia_vencimiento   int default 10,          -- día del mes en que vence el alquiler
+  dia_vencimiento   int default 1,           -- día del mes en que vence el alquiler
+  dia_gracia        int default 10,          -- último día para pagar sin recargo
+  punitorio_diario  numeric default 0.3,     -- % punitorio por día de atraso
+  tasa_bna_anual    numeric default 75,      -- % anual tasa activa BNA (editable)
+  capitaliza_meses  int default 6,           -- capitalización de intereses
+  penal_ocupacion_pct numeric default 20,    -- % del canon por día de ocupación ilegítima
+  rescision_pct     numeric default 10,      -- % del canon futuro por rescisión anticipada
+  dias_acreditar_servicios int default 30,   -- plazo para acreditar pago de servicios
+  fiadores          text,
+  administradora    text,
+  destino           text,
+  fecha_tenencia    date,
   ajuste_indice     text default 'ICL'
                     check (ajuste_indice in ('ICL','IPC','CASA_PROPIA','FIJO','NINGUNO')),
   ajuste_periodo    text,                    -- frecuencia en meses (ej: '3')
