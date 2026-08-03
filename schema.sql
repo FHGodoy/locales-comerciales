@@ -95,6 +95,25 @@ create table if not exists public.gastos (
   created_at   timestamptz default now()
 );
 
+-- ---------- AJUSTES DEL CANON ----------
+-- Cada actualización del alquiler queda asentada acá. El canon vigente se
+-- calcula encadenando estos ajustes desde el monto inicial del contrato.
+create table if not exists public.ajustes_contrato (
+  id             bigint generated always as identity primary key,
+  contrato_id    bigint references public.contratos(id) on delete cascade,
+  fecha          date not null,
+  indice         text default 'ICL',
+  valor_desde    numeric,
+  valor_hasta    numeric,
+  factor         numeric,
+  monto_anterior numeric,
+  monto_nuevo    numeric not null,
+  origen         text default 'manual' check (origen in ('manual','automatico')),
+  notas          text,
+  created_at     timestamptz default now(),
+  unique (contrato_id, fecha)
+);
+
 -- ---------- CUENTAS Y SERVICIOS (impuestos, agua, energía) ----------
 create table if not exists public.cuentas_servicio (
   id            bigint generated always as identity primary key,
@@ -147,12 +166,13 @@ alter table public.contratos         enable row level security;
 alter table public.pagos             enable row level security;
 alter table public.gastos            enable row level security;
 alter table public.cuentas_servicio  enable row level security;
+alter table public.ajustes_contrato  enable row level security;
 
 -- Permite todo (leer/crear/editar/borrar) SOLO a usuarios autenticados.
 do $$
 declare t text;
 begin
-  foreach t in array array['locales','inquilinos','contratos','pagos','gastos','cuentas_servicio']
+  foreach t in array array['locales','inquilinos','contratos','pagos','gastos','cuentas_servicio','ajustes_contrato']
   loop
     execute format(
       'drop policy if exists "acceso_autenticado" on public.%I;', t);

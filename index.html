@@ -243,52 +243,86 @@ document.querySelectorAll('#tabs button').forEach(b=>{
 
 /* ---------- Datos ---------- */
 async function loadAll(){
-  const [lo,inq,con,pa,ga,cu] = await Promise.all([
+  const [lo,inq,con,pa,ga,cu,aj] = await Promise.all([
     sb.from('locales').select('*').order('id'),
     sb.from('inquilinos').select('*').order('nombre'),
     sb.from('contratos').select('*').order('id',{ascending:false}),
     sb.from('pagos').select('*').order('periodo',{ascending:false}),
     sb.from('gastos').select('*').order('fecha',{ascending:false}),
     sb.from('cuentas_servicio').select('*').order('tipo').order('id'),
+    sb.from('ajustes_contrato').select('*').order('fecha'),
   ]);
   DATA = {
     locales:lo.data||[], inquilinos:inq.data||[], contratos:con.data||[],
-    pagos:pa.data||[], gastos:ga.data||[], cuentas:cu.data||[]
+    pagos:pa.data||[], gastos:ga.data||[], cuentas:cu.data||[],
+    ajustes:(aj&&aj.data)||[]
   };
 }
 /* ===================== MOTOR DE CÁLCULO (canon, alertas, mora) ===================== */
 const HOY = ()=> new Date().toISOString().slice(0,10);
 const diffDias=(a,b)=>Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000);
 
-// Canon vigente hoy: aplica los ajustes ya cumplidos desde el inicio del contrato.
-// Con ICL usa la serie oficial del BCRA si está descargada; si no, informa que falta.
+/* Fechas en que corresponde ajustar el canon, desde el inicio del contrato
+   y encadenadas cada N meses hasta el fin del contrato. */
+function fechasAjuste(c){
+  const out=[]; if(!c.fecha_inicio) return out;
+  const frec=Math.max(1,parseInt(c.ajuste_periodo)||4);
+  const tope=c.fecha_fin||addMonthsISO(c.fecha_inicio,120);
+  let f=addMonthsISO(c.fecha_inicio,frec);
+  while(f<=tope){ out.push(f); f=addMonthsISO(f,frec); }
+  return out;
+}
+
+/* Canon vigente hoy.
+   Se encadena así: canon inicial → ajuste 1 → ajuste 2 → …
+   Cada tramo se toma, en este orden de prioridad:
+     1. el ajuste ya REGISTRADO en la base (fuente definitiva),
+     2. la serie oficial descargada (ICL/IPC), si está disponible,
+     3. si no hay ninguno, el tramo queda PENDIENTE y se avisa.          */
 function canonVigente(c){
   const base=Number(c.monto_alquiler)||0;
-  const res={monto:base, ajustes:0, proximo:null, fuente:'contrato', pendiente:false};
+  const res={monto:base, ajustes:0, proximo:null, fuente:'contrato',
+             pendientes:[], registrados:0, calculados:0};
   if(!c.fecha_inicio) return res;
-  const frec=Math.max(1,parseInt(c.ajuste_periodo)||4);
   const hoy=HOY();
-  // fechas de ajuste ya cumplidas
-  let f=addMonthsISO(c.fecha_inicio,frec), prev=c.fecha_inicio, monto=base, n=0;
   const idx=c.ajuste_indice||'ICL';
-  while(f<=hoy){
-    let factor=null;
+  const regs=(DATA.ajustes||[]).filter(a=>a.contrato_id==c.id)
+              .sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
+  let monto=base, prev=c.fecha_inicio;
+  const fechas=fechasAjuste(c);
+
+  for(const f of fechas){
+    if(f>hoy){ res.proximo=f; break; }
+    const reg=regs.find(a=>String(a.fecha)===f);
+    if(reg){                                    // 1) ajuste asentado
+      monto=Number(reg.monto_nuevo)||monto;
+      res.ajustes++; res.registrados++; prev=f; continue;
+    }
+    let factor=null;                            // 2) serie oficial
     if(idx==='FIJO' && c.ajuste_porcentaje) factor=1+Number(c.ajuste_porcentaje)/100;
     else if(idx==='ICL' && SERIES.ICL){
       const a=iclAt(SERIES.ICL,prev), b=iclAt(SERIES.ICL,f);
       if(a&&b) factor=b/a;
     } else if(idx==='IPC' && SERIES.IPC){
-      factor=1;
+      let ok=true, fa=1;
       for(const m of monthsBetween(prev,f)){
         const d=SERIES.IPC.find(x=>x.mes===m);
-        if(d) factor*=1+d.valor/100; else { res.pendiente=true; }
+        if(d) fa*=1+d.valor/100; else ok=false;
       }
+      if(ok) factor=fa;
     }
-    if(factor===null){ res.pendiente=true; }
-    else { monto*=factor; n++; res.fuente=(idx==='FIJO'?'% fijo del contrato':idx+' oficial'); }
-    prev=f; f=addMonthsISO(f,frec);
+    if(factor!==null){
+      monto*=factor; res.ajustes++; res.calculados++;
+      res.fuente=(idx==='FIJO'?'% fijo del contrato':idx+' (serie oficial)');
+    } else {
+      res.pendientes.push(f);                   // 3) no se pudo calcular
+    }
+    prev=f;
   }
-  res.monto=monto; res.ajustes=n; res.proximo=f;
+  if(!res.proximo){ const fut=fechas.find(f=>f>hoy); res.proximo=fut||null; }
+  if(res.registrados) res.fuente = res.calculados ? 'ajustes registrados + serie oficial' : 'ajustes registrados';
+  res.monto=monto;
+  res.pendiente=res.pendientes.length>0;
   return res;
 }
 
@@ -353,6 +387,12 @@ function alertas(){
   for(const c of activos){
     const et=estadoAlquiler(c), v=canonVigente(c);
     const quien=`${localName(c.local_id)} · ${inqName(c.inquilino_id)}`;
+    // ajustes vencidos sin aplicar → el canon mostrado está desactualizado
+    if(v.pendiente){
+      out.push({n:3,t:'Alquiler sin actualizar',
+        d:`${quien}: falta aplicar ${v.pendientes.length} ajuste(s) por ${idxLabel(c.ajuste_indice)} (${v.pendientes.map(fdate).join(', ')}). El monto que se muestra todavía es el anterior.`,
+        b:`<button class="btn sm" onclick="openAjustes(${c.id})">Aplicar ahora</button>`});
+    }
     if(et.estado==='mora'){
       const m=calcMora(v.monto, et.dias, c.punitorio_diario, c.tasa_bna_anual, c.capitaliza_meses);
       out.push({n:3,t:'Alquiler en mora',d:`${quien}: ${et.msg} Deuda estimada ${money(m.deuda,c.moneda)} (capital ${money(v.monto,c.moneda)} + intereses ${money(m.total,c.moneda)}).`,
@@ -564,14 +604,16 @@ function viewContratos(){
     return `<tr>
       <td><strong>${esc(localName(c.local_id))}</strong></td>
       <td>${esc(inqName(c.inquilino_id))}</td>
-      <td><strong>${money(v.monto,c.moneda)}</strong>
-        ${v.ajustes?`<div class="muted" style="font-size:11px">base ${money(c.monto_alquiler,c.moneda)} · ${v.ajustes} ajuste(s)</div>`:''}</td>
+      <td><strong style="${v.pendiente?'color:var(--warn)':''}">${money(v.monto,c.moneda)}</strong>
+        ${v.ajustes?`<div class="muted" style="font-size:11px">base ${money(c.monto_alquiler,c.moneda)} · ${v.ajustes} ajuste(s)</div>`:''}
+        ${v.pendiente?`<div style="font-size:11px;color:var(--warn)">⚠️ ${v.pendientes.length} ajuste(s) sin aplicar</div>`:''}</td>
       <td>${fdate(c.fecha_inicio)} → ${fdate(c.fecha_fin)}</td>
       <td>${idxLabel(c.ajuste_indice)}${c.ajuste_periodo?` <span class="muted">c/${esc(c.ajuste_periodo)}m</span>`:''}
         ${v.proximo?`<div class="muted" style="font-size:11px">próx: ${fdate(v.proximo)}</div>`:''}</td>
       <td>${et?`<span class="chip ${chipPago[et.estado]}">${et.estado==='porvencer'?'al día':et.estado}</span>`
              :`<span class="chip ${c.estado}">${c.estado}</span>`}</td>
       <td class="actbtns">
+        <button class="btn ${v.pendiente?'':'sec'} sm" onclick="openAjustes(${c.id})">Ajustes${v.pendiente?' ('+v.pendientes.length+')':''}</button>
         <button class="btn sec sm" onclick="openMora(${c.id})">Mora</button>
         <button class="btn sec sm" onclick="openProyeccion(${c.id})">Proyección</button>
         <button class="btn sec sm" onclick="openContrato(${c.id})">Editar</button>
@@ -944,6 +986,132 @@ window.openCuenta=(id)=>{
   });
 };
 
+/* ============================ AJUSTES DEL CANON ============================ */
+/*  Cada actualización se asienta en la base y se encadena sobre el monto
+    anterior: canon inicial → 1er ajuste → 2do ajuste → …
+    El valor del ICL se puede traer del BCRA o cargar a mano (el BCRA lo
+    publica a diario en bcra.gob.ar → Estadísticas → Principales variables). */
+window.openAjustes=(id)=>{
+  const c=DATA.contratos.find(x=>x.id==id); if(!c) return;
+  const hoy=HOY();
+  const fechas=fechasAjuste(c);
+  const regs=(DATA.ajustes||[]).filter(a=>a.contrato_id==c.id)
+              .sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
+
+  // reconstruye la cadena para saber el monto anterior de cada tramo
+  let monto=Number(c.monto_alquiler)||0, prev=c.fecha_inicio;
+  const filas=[{fecha:c.fecha_inicio, tipo:'inicio', monto:monto}];
+  for(const f of fechas){
+    const reg=regs.find(a=>String(a.fecha)===f);
+    if(reg){
+      filas.push({fecha:f, tipo:'registrado', anterior:monto, monto:Number(reg.monto_nuevo),
+                  reg:reg});
+      monto=Number(reg.monto_nuevo);
+    } else if(f<=hoy){
+      filas.push({fecha:f, tipo:'pendiente', anterior:monto, monto:null, desde:prev});
+    } else {
+      filas.push({fecha:f, tipo:'futuro', anterior:monto, monto:null, desde:prev});
+    }
+    prev=f;
+  }
+
+  const filaHtml=(r)=>{
+    if(r.tipo==='inicio') return `<tr><td>${fdate(r.fecha)}</td><td class="muted">Canon inicial</td>
+      <td><strong>${money(r.monto,c.moneda)}</strong></td><td></td><td></td></tr>`;
+    if(r.tipo==='registrado') return `<tr>
+      <td>${fdate(r.fecha)}</td>
+      <td>${esc(r.reg.indice||'ICL')} ${r.reg.factor?`<span class="muted">×${Number(r.reg.factor).toFixed(4)}</span>`:''}
+        ${r.reg.valor_desde&&r.reg.valor_hasta?`<div class="muted" style="font-size:11px">${r.reg.valor_desde} → ${r.reg.valor_hasta}</div>`:''}</td>
+      <td><strong>${money(r.monto,c.moneda)}</strong>
+        <div class="muted" style="font-size:11px">desde ${money(r.anterior,c.moneda)} · +${(((r.monto/r.anterior)-1)*100).toFixed(1)}%</div></td>
+      <td><span class="chip pagado">aplicado</span></td>
+      <td class="actbtns">
+        <button class="btn sec sm" onclick="formAjuste(${c.id},'${r.fecha}',${r.anterior})">Editar</button>
+        <button class="btn danger sm" onclick="delAjuste(${r.reg.id})">Borrar</button></td></tr>`;
+    if(r.tipo==='pendiente') return `<tr style="background:rgba(239,68,68,.07)">
+      <td>${fdate(r.fecha)}</td><td class="muted">${idxLabel(c.ajuste_indice)}</td>
+      <td class="muted">— sin aplicar —</td>
+      <td><span class="chip pendiente">vencido</span></td>
+      <td class="actbtns"><button class="btn sm" onclick="formAjuste(${c.id},'${r.fecha}',${r.anterior},'${r.desde}')">Aplicar</button></td></tr>`;
+    return `<tr><td>${fdate(r.fecha)}</td><td class="muted">${idxLabel(c.ajuste_indice)}</td>
+      <td class="muted">a futuro</td><td><span class="chip activo">programado</span></td><td></td></tr>`;
+  };
+
+  const nPend=filas.filter(f=>f.tipo==='pendiente').length;
+  openModal('Ajustes del canon · '+contratoLabel(c),`
+    ${nPend?`<div class="setup">⚠️ Hay ${nPend} ajuste(s) vencidos sin aplicar. El alquiler que ves en el tablero NO está actualizado hasta que los cargues.</div>`:''}
+    <p class="muted" style="font-size:12px;margin:0 0 12px">
+      Cada ajuste se calcula sobre el monto que quedó en el ajuste anterior.
+      Podés traer el valor del ICL automáticamente o cargarlo a mano desde
+      <a href="https://www.bcra.gob.ar/PublicacionesEstadisticas/Principales_variables.asp" target="_blank" rel="noopener">bcra.gob.ar</a>.
+    </p>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Fecha</th><th>Índice</th><th>Nuevo canon</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${filas.map(filaHtml).join('')}</tbody></table></div>
+  `, null, {hideSave:true});
+};
+
+window.delAjuste=async (id)=>{
+  if(!confirm('¿Borrar este ajuste? El canon volverá al valor anterior.')) return;
+  const {error}=await sb.from('ajustes_contrato').delete().eq('id',id);
+  if(error){ alert(error.message); return; }
+  await loadAll(); closeModal();
+  render(document.querySelector('#tabs button.active').dataset.tab);
+};
+
+window.formAjuste=(contratoId, fecha, anterior, desde)=>{
+  const c=DATA.contratos.find(x=>x.id==contratoId);
+  const reg=(DATA.ajustes||[]).find(a=>a.contrato_id==contratoId && String(a.fecha)===fecha);
+  const idx=c.ajuste_indice||'ICL';
+  // si la serie está descargada, precarga los valores del índice
+  let vd=reg?reg.valor_desde:'', vh=reg?reg.valor_hasta:'';
+  if(!reg && idx==='ICL' && SERIES.ICL && desde){
+    const a=iclAt(SERIES.ICL,desde), b=iclAt(SERIES.ICL,fecha);
+    if(a) vd=a; if(b) vh=b;
+  }
+  openModal('Ajuste al '+fdate(fecha),`
+    <div class="card" style="margin-bottom:14px">
+      <div class="sumline"><span class="muted">Canon anterior</span><strong>${money(anterior,c.moneda)}</strong></div>
+      <div class="sumline"><span class="muted">Período</span><span>${desde?fdate(desde):'—'} → ${fdate(fecha)}</span></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>${idx} al inicio del período</label><input id="a_vd" type="number" step="0.0001" value="${esc(vd)}"></div>
+      <div class="field"><label>${idx} a la fecha de ajuste</label><input id="a_vh" type="number" step="0.0001" value="${esc(vh)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Factor</label><input id="a_fac" type="number" step="0.000001" value="${reg&&reg.factor?esc(reg.factor):''}" placeholder="se calcula solo"></div>
+      <div class="field"><label>Nuevo canon</label><input id="a_new" type="number" step="0.01" value="${reg?esc(reg.monto_nuevo):''}"></div>
+    </div>
+    <p class="muted" id="a_calc" style="font-size:12px;margin:0 0 10px"></p>
+    <div class="field"><label>Notas</label><input id="a_notas" value="${esc(reg?reg.notas||'':'')}"></div>
+  `, async ()=>{
+    const nuevo=Number(val('a_new'));
+    if(!nuevo || nuevo<=0) throw new Error('Indicá el nuevo canon (o cargá los valores del índice para calcularlo).');
+    const payload={
+      contrato_id:contratoId, fecha:fecha, indice:idx,
+      valor_desde:numOrNull(val('a_vd')), valor_hasta:numOrNull(val('a_vh')),
+      factor:numOrNull(val('a_fac')), monto_anterior:anterior,
+      monto_nuevo:nuevo, origen:'manual', notas:val('a_notas')
+    };
+    const q = reg ? sb.from('ajustes_contrato').update(payload).eq('id',reg.id)
+                  : sb.from('ajustes_contrato').insert(payload);
+    const {error}=await q; if(error) throw error;
+  });
+
+  const recalc=()=>{
+    const a=Number(val('a_vd')), b=Number(val('a_vh'));
+    const info=document.getElementById('a_calc');
+    if(a>0&&b>0){
+      const f=b/a;
+      document.getElementById('a_fac').value=f.toFixed(6);
+      document.getElementById('a_new').value=Math.round(anterior*f);
+      info.textContent=`Factor ${f.toFixed(4)} → aumento del ${((f-1)*100).toFixed(2)}%. Nuevo canon: ${money(anterior*f,c.moneda)}.`;
+    } else info.textContent='Cargá los dos valores del índice y el nuevo canon se calcula solo. También podés escribir el monto directamente.';
+  };
+  ['a_vd','a_vh'].forEach(i=>{const e=document.getElementById(i); if(e) e.oninput=recalc;});
+  recalc();
+};
+
 /* ============================ INTERESES POR MORA ============================ */
 /*  Cláusula 8ª del contrato: la mora es automática desde el día 1 de cada mes
     (se pierden los días de gracia de la cláusula 3ª). Se devengan:
@@ -1019,16 +1187,38 @@ window.openMora=(id)=>{
 const idxLabel=(i)=>({ICL:'ICL',IPC:'IPC',CASA_PROPIA:'Casa Propia',FIJO:'% fijo',NINGUNO:'—'}[i]||'—');
 let SERIES={ICL:null,IPC:null}; // cache de series descargadas
 
+/* Descarga de la serie ICL. Se prueban varias fuentes porque algunas
+   bloquean el pedido desde el navegador (CORS). Si todas fallan, el canon
+   se calcula igual con los ajustes cargados a mano.                      */
+let ULTIMO_ERROR_ICL='';
 async function fetchICL(desde){
-  // Serie diaria ICL del BCRA (idVariable 40)
   const hasta=new Date().toISOString().slice(0,10);
-  const url=`https://api.bcra.gob.ar/estadisticas/v3.0/monetarias/40?desde=${desde}&hasta=${hasta}&limit=3000`;
-  const r=await fetch(url); if(!r.ok) throw new Error('BCRA HTTP '+r.status);
-  const j=await r.json();
-  const arr=(j.results||[]).map(x=>({fecha:x.fecha,valor:Number(x.valor)}))
-    .sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  if(!arr.length) throw new Error('BCRA sin datos');
-  return arr;
+  const fuentes=[
+    { n:'BCRA',
+      u:`https://api.bcra.gob.ar/estadisticas/v3.0/monetarias/40?desde=${desde}&hasta=${hasta}&limit=3000`,
+      p:j=>(j.results||[]).map(x=>({fecha:x.fecha,valor:Number(x.valor)})) },
+    { n:'ArgentinaDatos',
+      u:'https://api.argentinadatos.com/v1/finanzas/indices/icl',
+      p:j=>(j||[]).map(x=>({fecha:String(x.fecha).slice(0,10),valor:Number(x.valor)})) },
+    { n:'Argly',
+      u:'https://api.argly.com.ar/v1/icl',
+      p:j=>((j&&j.data)||j||[]).map(x=>({fecha:String(x.fecha||x.date).slice(0,10),valor:Number(x.valor??x.value)})) },
+  ];
+  const errores=[];
+  for(const f of fuentes){
+    try{
+      const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(),12000);
+      const r=await fetch(f.u,{signal:ctl.signal}); clearTimeout(t);
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const arr=f.p(await r.json())
+        .filter(x=>x.fecha && isFinite(x.valor) && x.valor>0)
+        .sort((a,b)=>a.fecha.localeCompare(b.fecha));
+      if(arr.length){ ULTIMO_ERROR_ICL=''; console.log('ICL desde '+f.n+': '+arr.length+' registros'); return arr; }
+      throw new Error('sin datos');
+    }catch(e){ errores.push(f.n+': '+(e.message||e)); }
+  }
+  ULTIMO_ERROR_ICL=errores.join(' · ');
+  throw new Error(ULTIMO_ERROR_ICL);
 }
 async function fetchIPC(){
   // Inflación mensual (INDEC, vía ArgentinaDatos)

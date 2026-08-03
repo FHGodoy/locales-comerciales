@@ -132,10 +132,40 @@ Datos tomados del contrato firmado el 16/10/2025:
 | Administra | Habitar Propiedades · Alto del Bono Shopping |
 | Servicios | Energía, gas, agua y tasa municipal a cargo de la locataria; **impuesto inmobiliario a cargo del locador**. Debe acreditar el pago dentro de los 30 días |
 
+### Ajustes del canon (importante)
+
+El alquiler se actualiza **en cascada**: cada ajuste se calcula sobre el monto que
+quedó en el ajuste anterior, no sobre el canon original.
+
+Para el contrato de Illanes (inicio 01/10/2025, cada 4 meses):
+
+```
+01/10/2025   $520.000                      canon inicial
+01/02/2026   $520.000 × factor ICL         1er ajuste
+01/06/2026   (monto anterior) × factor ICL 2do ajuste
+01/10/2026   (monto anterior) × factor ICL 3er ajuste
+01/02/2027 · 01/06/2027                    y así hasta el fin del contrato
+```
+
+Cada ajuste queda **asentado en la base de datos**, así el valor no depende de que
+la app logre conectarse al BCRA. En **Contratos** → botón **Ajustes** ves la
+cadena completa: los aplicados, los vencidos sin aplicar y los programados a futuro.
+
+Para cargar un ajuste, ponés el valor del ICL al inicio del período y a la fecha
+del ajuste; la app calcula el factor y el nuevo canon. También podés escribir el
+monto directamente. Si la app logró descargar la serie del BCRA, los valores
+vienen precargados.
+
+> **Si el alquiler aparece sin actualizar** verás un aviso rojo en el Resumen y el
+> monto en color naranja. Significa que hay ajustes vencidos que todavía no se
+> cargaron: entrá a *Ajustes* y aplicalos. El ICL diario se consulta en
+> [bcra.gob.ar → Principales variables](https://www.bcra.gob.ar/PublicacionesEstadisticas/Principales_variables.asp).
+
 ### Alertas automáticas
 
 El Resumen muestra avisos ordenados por urgencia:
 
+- 🔴 Alquiler sin actualizar (hay ajustes vencidos sin aplicar)
 - 🔵 Alquiler próximo a vencer (faltan 5 días o menos)
 - 🟠 En período de gracia (entre el día 1 y el 10, aún sin recargo)
 - 🔴 En mora (pasado el día 10), con la deuda estimada con intereses

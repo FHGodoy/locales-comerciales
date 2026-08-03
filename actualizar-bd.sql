@@ -119,6 +119,32 @@ where not exists (
   where i.dni_cuit='25.550.495'
 );
 
+-- ---------- 5) Registro de ajustes del canon ----------
+-- Cada actualización queda asentada acá. El canon vigente se calcula
+-- encadenando estos ajustes desde el monto inicial del contrato, así el
+-- valor no depende de que la app pueda conectarse al BCRA.
+create table if not exists public.ajustes_contrato (
+  id             bigint generated always as identity primary key,
+  contrato_id    bigint references public.contratos(id) on delete cascade,
+  fecha          date not null,          -- fecha en que rige el nuevo canon
+  indice         text default 'ICL',
+  valor_desde    numeric,                -- índice al inicio del período
+  valor_hasta    numeric,                -- índice a la fecha del ajuste
+  factor         numeric,                -- valor_hasta / valor_desde
+  monto_anterior numeric,
+  monto_nuevo    numeric not null,
+  origen         text default 'manual'   -- manual / automatico
+                 check (origen in ('manual','automatico')),
+  notas          text,
+  created_at     timestamptz default now(),
+  unique (contrato_id, fecha)
+);
+
+alter table public.ajustes_contrato enable row level security;
+drop policy if exists "acceso_autenticado" on public.ajustes_contrato;
+create policy "acceso_autenticado" on public.ajustes_contrato
+  for all to authenticated using (true) with check (true);
+
 -- El Local 3 pasa a ocupado
 update public.locales set estado='ocupado'
 where nombre='Local 3'
